@@ -421,7 +421,7 @@ export class Level4PowerMeter {
         commentary.setStat("p1PowerScore", this.targetP1Score);
         commentary.setStat("p2PowerScore", this.targetP2Score);
 
-        this.subText.text = "POWER TEST COMPLETE // BIOMETRIC EVALUATION COMPILED";
+        this.subText.text = "POWER TEST COMPLETE // [ CLICK OR SPACE TO ADVANCE ]";
         this.subText.style.fill = "#10B981";
 
         // Sarcastic Piper alien commentary
@@ -430,9 +430,34 @@ export class Level4PowerMeter {
             { force: true }
         );
 
-        setTimeout(() => {
+        let advanced = false;
+        const advance = () => {
+            if (advanced) return;
+            advanced = true;
+            if (this._advanceTimeout) {
+                clearTimeout(this._advanceTimeout);
+                this._advanceTimeout = null;
+            }
+            if (this._advanceKeyCleanup) {
+                this._advanceKeyCleanup();
+                this._advanceKeyCleanup = null;
+            }
             this.onComplete();
-        }, 5500);
+        };
+
+        const onKey = (e) => {
+            if (e.type === "keydown" && e.code !== "Space" && e.code !== "Enter") return;
+            advance();
+        };
+
+        window.addEventListener("keydown", onKey);
+        window.addEventListener("pointerup", onKey);
+        this._advanceKeyCleanup = () => {
+            window.removeEventListener("keydown", onKey);
+            window.removeEventListener("pointerup", onKey);
+        };
+
+        this._advanceTimeout = setTimeout(advance, 5500);
     }
 
     // ─── Webcam PiP Overlay ───────────────────────────────────────────────────
@@ -599,6 +624,14 @@ export class Level4PowerMeter {
     }
 
     destroy() {
+        if (this._advanceKeyCleanup) {
+            this._advanceKeyCleanup();
+            this._advanceKeyCleanup = null;
+        }
+        if (this._advanceTimeout) {
+            clearTimeout(this._advanceTimeout);
+            this._advanceTimeout = null;
+        }
         if (this.unsubscribeCommentary) this.unsubscribeCommentary();
         if (this.unsubscribeMouth) this.unsubscribeMouth();
         this.destroyWebcamPiP();

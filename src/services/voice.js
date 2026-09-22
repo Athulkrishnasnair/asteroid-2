@@ -149,6 +149,10 @@ class VoiceService {
     }
 
     stopSpeaking() {
+        if (this._currentSpeakResolver) {
+            try { this._currentSpeakResolver(true); } catch (e) {}
+            this._currentSpeakResolver = null;
+        }
         // Stop AudioContext source if active
         if (this._currentSource) {
             try {
@@ -263,8 +267,9 @@ class VoiceService {
             this.stopSpeaking();
 
             // Prefer AudioContext playback (immune to autoplay policy after unlock)
-            if (this.audioCtx && this.audioCtx.state !== "closed") {
-                return new Promise((resolve) => {
+            const playPromise = (this.audioCtx && this.audioCtx.state !== "closed")
+                ? new Promise((resolve) => {
+                    this._currentSpeakResolver = resolve;
                     this.audioCtx.decodeAudioData(arrayBuffer, (audioBuffer) => {
                         const source = this.audioCtx.createBufferSource();
                         const gainNode = this.audioCtx.createGain();
@@ -279,19 +284,35 @@ class VoiceService {
                         source.onended = () => {
                             this.isSpeaking = false;
                             this._currentSource = null;
+                            if (this._currentSpeakResolver === resolve) {
+                                this._currentSpeakResolver = null;
+                            }
                             resolve(true);
                         };
 
                         source.start(0);
                     }, (decodeErr) => {
                         console.warn("AudioContext decodeAudioData failed, falling back:", decodeErr);
-                        this._speakViaAudioElement(arrayBuffer).then(resolve);
+                        this._speakViaAudioElement(arrayBuffer).then((res) => {
+                            if (this._currentSpeakResolver === resolve) {
+                                this._currentSpeakResolver = null;
+                            }
+                            resolve(res);
+                        });
                     });
-                });
-            }
+                })
+                : this._speakViaAudioElement(arrayBuffer);
 
-            // AudioContext not available — fall back to Audio element
-            return this._speakViaAudioElement(arrayBuffer);
+            return Promise.race([
+                playPromise,
+                new Promise((resolve) => setTimeout(() => {
+                    if (this._currentSpeakResolver) {
+                        try { this._currentSpeakResolver(true); } catch (e) {}
+                        this._currentSpeakResolver = null;
+                    }
+                    resolve(true);
+                }, 12000))
+            ]);
 
         } catch (err) {
             console.warn("VoiceService.speak error (continuing without audio):", err);

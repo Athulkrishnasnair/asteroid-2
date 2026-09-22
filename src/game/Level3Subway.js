@@ -6,6 +6,7 @@
 
 import { Container, Graphics, Sprite, AnimatedSprite, Text } from "pixi.js";
 import { voice } from "../services/voice.js";
+import { createVoiceRecognizer } from "../services/voiceRecognizer.js";
 import { commentary } from "../services/commentary.js";
 
 export class Level3Subway {
@@ -76,13 +77,33 @@ export class Level3Subway {
         this.roastCooldown = 2.5;
         this.escalationStages = [20, 40, 52];
 
+        // Web Speech API Voice Recognizer adapter (with Whisper backup available)
+        this.voiceRecognizer = createVoiceRecognizer("webspeech");
+
+        // TEST MODE (CTRL + \) configuration
+        this.testMode = false;
+        this.debugPanelVisible = false;
+        this._catchAnimTicker = null;
+        this._completeTimeout = null;
+
+        // CTRL + \ Keyboard Shortcut for TEST MODE
+        this.onKeyDown = (e) => {
+            if (e.ctrlKey && (e.key === "\\" || e.code === "Backslash")) {
+                e.preventDefault();
+                this.toggleTestMode();
+            }
+        };
+        window.addEventListener("keydown", this.onKeyDown);
+
         this.initVisuals();
         this.initPlayer();
         this.initAlienOfficer();
         this.initHUD();
+        this.initTestModeBadge();
+        this.initVoiceDebugPanel();
         this.recalculateLayout();
 
-        // Start Voice Command Recognition via Whisper + Web Audio API
+        // Start Voice Command Recognition via Web Speech API
         this.initVoiceCommands();
     }
 
@@ -97,6 +118,10 @@ export class Level3Subway {
         this.player.targetX = this.centerX + this.player.lane * this.laneSpacing;
         this.player.x = this.player.targetX;
         this.player.y = this.playerBaseY;
+
+        if (this.testBadge) {
+            this.testBadge.x = (sw - 360) / 2;
+        }
 
         this.drawTrack();
     }
@@ -234,7 +259,7 @@ export class Level3Subway {
     initHUD() {
         // Level Title & Voice Command Legend
         this.titleText = new Text({
-            text: "LEVEL 3: ALIEN SUBWAY PURSUIT // SAY: LEFT | RIGHT | JUMP | DUCK",
+            text: "LEVEL 3: ALIEN SUBWAY PURSUIT // SAY: LEFT | RIGHT | UP | DOWN",
             style: {
                 fontFamily: this.fontFamily,
                 fontSize: 10,
@@ -272,6 +297,19 @@ export class Level3Subway {
         this.statsText.y = 58;
         this.uiLayer.addChild(this.statsText);
 
+        // Shortcut hint tag
+        this.shortcutBadge = new Text({
+            text: "[CTRL+\\ FOR TEST MODE / DEBUG]",
+            style: {
+                fontFamily: this.fontFamily,
+                fontSize: 7.5,
+                fill: "#64748B",
+            },
+        });
+        this.shortcutBadge.x = 18;
+        this.shortcutBadge.y = 78;
+        this.uiLayer.addChild(this.shortcutBadge);
+
         // Subtitle dialogue box (bottom center)
         this.dialogueBox = new Container();
         this.dialogueBg = new Graphics();
@@ -300,6 +338,120 @@ export class Level3Subway {
         });
     }
 
+    initTestModeBadge() {
+        this.testBadge = new Container();
+        const bg = new Graphics();
+        bg.roundRect(0, 0, 360, 26, 4);
+        bg.fill({ color: 0x78350f, alpha: 0.95 });
+        bg.stroke({ color: 0xf59e0b, width: 2 });
+        this.testBadge.addChild(bg);
+
+        this.testBadgeText = new Text({
+            text: "★ TEST MODE ACTIVE — NO PENALTIES [CTRL+\\]",
+            style: { fontFamily: this.fontFamily, fontSize: 8, fill: "#FDE047" },
+        });
+        this.testBadgeText.anchor.set(0.5);
+        this.testBadgeText.x = 180;
+        this.testBadgeText.y = 13;
+        this.testBadge.addChild(this.testBadgeText);
+
+        this.testBadge.x = (this.app.screen.width - 360) / 2;
+        this.testBadge.y = 14;
+        this.testBadge.visible = false;
+        this.uiLayer.addChild(this.testBadge);
+    }
+
+    initVoiceDebugPanel() {
+        this.debugPanel = new Container();
+        const panelW = 340;
+        const panelH = 156;
+        const bg = new Graphics();
+        bg.roundRect(0, 0, panelW, panelH, 6);
+        bg.fill({ color: 0x05080e, alpha: 0.94 });
+        bg.stroke({ color: 0x38bdf8, width: 2 });
+        this.debugPanel.addChild(bg);
+
+        const title = new Text({
+            text: "LEVEL 3 VOICE DEBUG // WEB SPEECH API",
+            style: { fontFamily: this.fontFamily, fontSize: 8, fill: "#38BDF8" },
+        });
+        title.x = 12;
+        title.y = 10;
+        this.debugPanel.addChild(title);
+
+        this.dbgListening = new Text({ text: "LISTENING: NO", style: { fontFamily: this.fontFamily, fontSize: 7, fill: "#F87171" } });
+        this.dbgListening.x = 12; this.dbgListening.y = 28;
+        this.debugPanel.addChild(this.dbgListening);
+
+        this.dbgStatus = new Text({ text: "RECOGNITION STATUS: IDLE", style: { fontFamily: this.fontFamily, fontSize: 7, fill: "#9CA3AF" } });
+        this.dbgStatus.x = 12; this.dbgStatus.y = 44;
+        this.debugPanel.addChild(this.dbgStatus);
+
+        this.dbgRaw = new Text({ text: "RAW TRANSCRIPT: (NONE)", style: { fontFamily: this.fontFamily, fontSize: 7, fill: "#E2E8F0", wordWrap: true, wordWrapWidth: 316 } });
+        this.dbgRaw.x = 12; this.dbgRaw.y = 60;
+        this.debugPanel.addChild(this.dbgRaw);
+
+        this.dbgNorm = new Text({ text: "NORMALIZED: (NONE)", style: { fontFamily: this.fontFamily, fontSize: 7, fill: "#CBD5E1" } });
+        this.dbgNorm.x = 12; this.dbgNorm.y = 86;
+        this.debugPanel.addChild(this.dbgNorm);
+
+        this.dbgCmd = new Text({ text: "DETECTED COMMAND: NONE", style: { fontFamily: this.fontFamily, fontSize: 7, fill: "#34D399" } });
+        this.dbgCmd.x = 12; this.dbgCmd.y = 102;
+        this.debugPanel.addChild(this.dbgCmd);
+
+        this.dbgAction = new Text({ text: "LAST ACTION: NONE", style: { fontFamily: this.fontFamily, fontSize: 7, fill: "#FBBF24" } });
+        this.dbgAction.x = 12; this.dbgAction.y = 118;
+        this.debugPanel.addChild(this.dbgAction);
+
+        this.dbgError = new Text({ text: "LAST ERROR: NONE", style: { fontFamily: this.fontFamily, fontSize: 7, fill: "#94A3B8" } });
+        this.dbgError.x = 12; this.dbgError.y = 134;
+        this.debugPanel.addChild(this.dbgError);
+
+        this.debugPanel.x = 18;
+        this.debugPanel.y = 102;
+        this.debugPanel.visible = false;
+        this.uiLayer.addChild(this.debugPanel);
+    }
+
+    updateDebugPanel(state = {}) {
+        if (!this.debugPanel) return;
+        const isListening = !!state.listening;
+        this.dbgListening.text = `LISTENING: ${isListening ? "YES" : "NO"}`;
+        this.dbgListening.style.fill = isListening ? "#34D399" : "#F87171";
+
+        this.dbgStatus.text = `RECOGNITION STATUS: ${(state.status || "IDLE").toUpperCase()}`;
+        this.dbgRaw.text = `RAW TRANSCRIPT: "${state.rawTranscript || ""}"`;
+        this.dbgNorm.text = `NORMALIZED: "${state.normalized || ""}"`;
+        this.dbgCmd.text = `DETECTED COMMAND: ${state.detectedCommand || "NONE"}`;
+        this.dbgAction.text = `LAST ACTION: ${state.lastAction || this.lastRecognizedCommand || "NONE"}`;
+        this.dbgError.text = `LAST ERROR: ${state.lastError || "NONE"}`;
+        this.dbgError.style.fill = (state.lastError && state.lastError !== "NONE") ? "#EF4444" : "#94A3B8";
+    }
+
+    toggleTestMode() {
+        this.testMode = !this.testMode;
+        console.log(`[Level 3] TEST MODE toggled: ${this.testMode ? "ENABLED" : "DISABLED"}`);
+
+        if (this.testBadge) {
+            this.testBadge.visible = this.testMode;
+        }
+        if (this.debugPanel) {
+            this.debugPanel.visible = this.testMode || this.debugPanelVisible;
+        }
+
+        if (this.soundManager) {
+            this.soundManager.playSelect();
+        }
+
+        if (this.testMode) {
+            this.cmdBadge.text = "TEST MODE ACTIVE // PENALTIES DISABLED [CTRL+\\]";
+            this.cmdBadge.style.fill = "#FDE047";
+        } else {
+            this.cmdBadge.text = "VOICE INPUT: LISTENING... [KEYBOARD OVERRIDE ACTIVE]";
+            this.cmdBadge.style.fill = "#34D399";
+        }
+    }
+
     showDialogue(text, duration = 3.5) {
         if (!text) return;
         this.dialogueText.text = `"${text}"`;
@@ -324,17 +476,21 @@ export class Level3Subway {
     }
 
     initVoiceCommands() {
-        // Start Whisper voice command listening
-        this.stopVoice = voice.startCommandRecognition({
+        // Start Web Speech API voice command recognition
+        this.voiceRecognizer.start({
             onCommand: (cmd, rawTranscript) => {
                 this.handleActionCommand(cmd, rawTranscript);
             },
             onVolume: (vol) => {
                 this.currentVolume = vol;
             },
-            onError: () => {
+            onError: (err) => {
+                console.warn("[Level 3 Voice] Recognition error:", err);
                 this.cmdBadge.text = "VOICE INPUT: STANDBY // KEYBOARD OVERRIDE READY [A/D/W/S]";
                 this.cmdBadge.style.fill = "#F87171";
+            },
+            onDebugState: (state) => {
+                this.updateDebugPanel(state);
             },
         });
     }
@@ -357,10 +513,14 @@ export class Level3Subway {
             this.changeLane(-1);
         } else if (cmd === "RIGHT") {
             this.changeLane(1);
-        } else if (cmd === "JUMP") {
+        } else if (cmd === "UP" || cmd === "JUMP") {
             this.performJump();
-        } else if (cmd === "DUCK") {
+        } else if (cmd === "DOWN" || cmd === "DUCK") {
             this.performDuck();
+        }
+
+        if (this.dbgAction) {
+            this.dbgAction.text = `LAST ACTION: ${cmd}`;
         }
     }
 
@@ -548,10 +708,10 @@ export class Level3Subway {
             this.handleActionCommand("RIGHT", "keyboard");
         }
         if (this.input.wasPressed("w") || this.input.wasPressed("W") || this.input.wasPressed("ArrowUp")) {
-            this.handleActionCommand("JUMP", "keyboard");
+            this.handleActionCommand("UP", "keyboard");
         }
         if (this.input.wasPressed("s") || this.input.wasPressed("S") || this.input.wasPressed("ArrowDown")) {
-            this.handleActionCommand("DUCK", "keyboard");
+            this.handleActionCommand("DOWN", "keyboard");
         }
     }
 
@@ -581,12 +741,20 @@ export class Level3Subway {
 
                     if (hit) {
                         obs.passed = true;
-                        if (this.soundManager) this.soundManager.playCrash();
-                        commentary.recordStat("subwayHits");
-                        commentary.roast("SUBWAY_CRASH", {}, { textOnly: true });
-                        // Flash red visual effect
-                        this.player.sprite.alpha = 0.4;
-                        setTimeout(() => { this.player.sprite.alpha = 1.0; }, 180);
+
+                        // When in TEST MODE, disable all penalties and consequences
+                        if (!this.testMode) {
+                            if (this.soundManager) this.soundManager.playCrash();
+                            commentary.recordStat("subwayHits");
+                            commentary.roast("SUBWAY_CRASH", {}, { textOnly: true });
+                            // Flash red visual effect
+                            this.player.sprite.alpha = 0.4;
+                            setTimeout(() => { if (this.player && this.player.sprite && !this.player.sprite.destroyed) this.player.sprite.alpha = 1.0; }, 180);
+                        } else {
+                            // Harmless ghost pass in test mode
+                            this.player.sprite.alpha = 0.8;
+                            setTimeout(() => { if (this.player && this.player.sprite && !this.player.sprite.destroyed) this.player.sprite.alpha = 1.0; }, 100);
+                        }
                     }
                 }
             }
@@ -601,6 +769,9 @@ export class Level3Subway {
     }
 
     handleCaptureProgression(dtSec) {
+        // In TEST MODE, disable automatic capture progression so testing can continue indefinitely
+        if (this.testMode) return;
+
         if (this.roastCooldown > 0) this.roastCooldown -= dtSec;
 
         // Escalating dialogue milestones
@@ -667,23 +838,42 @@ export class Level3Subway {
             this.policeShip.x += (this.player.x - this.policeShip.x) * 0.1;
 
             if (this.policeShip.y >= this.playerBaseY - 10) {
-                this.app.ticker.remove(catchAnim);
+                if (this._catchAnimTicker) {
+                    this.app.ticker.remove(this._catchAnimTicker);
+                    this._catchAnimTicker = null;
+                }
 
                 if (this.soundManager) {
                     this.soundManager.playLevelComplete();
                 }
 
-                setTimeout(() => {
+                this._completeTimeout = setTimeout(() => {
+                    this._completeTimeout = null;
                     this.onComplete();
                 }, 2400);
             }
         };
 
+        this._catchAnimTicker = catchAnim;
         this.app.ticker.add(catchAnim);
     }
 
     destroy() {
-        if (this.stopVoice) this.stopVoice();
+        if (this.onKeyDown) {
+            window.removeEventListener("keydown", this.onKeyDown);
+            this.onKeyDown = null;
+        }
+        if (this.voiceRecognizer) {
+            this.voiceRecognizer.stop();
+        }
+        if (this._catchAnimTicker) {
+            try { this.app.ticker.remove(this._catchAnimTicker); } catch (e) {}
+            this._catchAnimTicker = null;
+        }
+        if (this._completeTimeout) {
+            clearTimeout(this._completeTimeout);
+            this._completeTimeout = null;
+        }
         if (this.unsubscribeCommentary) this.unsubscribeCommentary();
         if (this.unsubscribeMouth) this.unsubscribeMouth();
         this.container.destroy({ children: true });

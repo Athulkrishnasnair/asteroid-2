@@ -208,8 +208,9 @@ export class FinalScreen {
         const sw = this.app.screen.width;
 
         const card = new Container();
+        const cardW = Math.min(640, sw - 40);
         const cardBg = new Graphics();
-        cardBg.roundRect(0, 0, Math.min(640, sw - 40), 280, 8);
+        cardBg.roundRect(0, 0, cardW, 280, 8);
         cardBg.fill({ color: 0x0a0f1d, alpha: 0.95 });
         cardBg.stroke({ color: 0x22c55e, width: 2 });
         card.addChild(cardBg);
@@ -219,7 +220,7 @@ export class FinalScreen {
             style: { fontFamily: this.fontFamily, fontSize: 11, fill: "#22C55E" },
         });
         title.anchor.set(0.5, 0);
-        title.x = cardBg.width / 2;
+        title.x = cardW / 2;
         title.y = 20;
         card.addChild(title);
 
@@ -228,7 +229,7 @@ export class FinalScreen {
             style: { fontFamily: this.fontFamily, fontSize: 13, fill: "#FFF", align: "center" },
         });
         prompt.anchor.set(0.5, 0);
-        prompt.x = cardBg.width / 2;
+        prompt.x = cardW / 2;
         prompt.y = 65;
         card.addChild(prompt);
 
@@ -237,7 +238,7 @@ export class FinalScreen {
             style: { fontFamily: "'VT323', monospace", fontSize: 20, fill: "#94A3B8", align: "center" },
         });
         sub.anchor.set(0.5, 0);
-        sub.x = cardBg.width / 2;
+        sub.x = cardW / 2;
         sub.y = 110;
         card.addChild(sub);
 
@@ -258,7 +259,7 @@ export class FinalScreen {
         bT.y = 21;
         btn.addChild(bT);
 
-        btn.x = (cardBg.width - 320) / 2;
+        btn.x = (cardW - 320) / 2;
         btn.y = 180;
         btn.eventMode = "static";
         btn.cursor = "pointer";
@@ -267,7 +268,7 @@ export class FinalScreen {
         });
         card.addChild(btn);
 
-        card.x = (sw - cardBg.width) / 2;
+        card.x = (sw - cardW) / 2;
         card.y = 70;
         this.contentLayer.addChild(card);
 
@@ -282,8 +283,9 @@ export class FinalScreen {
         const sw = this.app.screen.width;
 
         const card = new Container();
+        const cardW = Math.min(640, sw - 40);
         const cardBg = new Graphics();
-        cardBg.roundRect(0, 0, Math.min(640, sw - 40), 280, 8);
+        cardBg.roundRect(0, 0, cardW, 280, 8);
         cardBg.fill({ color: 0x0a0f1d, alpha: 0.95 });
         cardBg.stroke({ color: 0xfbbf24, width: 2 });
         card.addChild(cardBg);
@@ -293,7 +295,7 @@ export class FinalScreen {
             style: { fontFamily: this.fontFamily, fontSize: 11, fill: "#FBBF24" },
         });
         title.anchor.set(0.5, 0);
-        title.x = cardBg.width / 2;
+        title.x = cardW / 2;
         title.y = 20;
         card.addChild(title);
 
@@ -302,7 +304,7 @@ export class FinalScreen {
             style: { fontFamily: this.fontFamily, fontSize: 13, fill: "#FFF", align: "center" },
         });
         prompt.anchor.set(0.5, 0);
-        prompt.x = cardBg.width / 2;
+        prompt.x = cardW / 2;
         prompt.y = 65;
         card.addChild(prompt);
 
@@ -311,7 +313,7 @@ export class FinalScreen {
             style: { fontFamily: "'VT323', monospace", fontSize: 20, fill: "#94A3B8", align: "center" },
         });
         sub.anchor.set(0.5, 0);
-        sub.x = cardBg.width / 2;
+        sub.x = cardW / 2;
         sub.y = 110;
         card.addChild(sub);
 
@@ -331,7 +333,7 @@ export class FinalScreen {
         bT.y = 21;
         btn.addChild(bT);
 
-        btn.x = (cardBg.width - 320) / 2;
+        btn.x = (cardW - 320) / 2;
         btn.y = 180;
         btn.eventMode = "static";
         btn.cursor = "pointer";
@@ -340,7 +342,7 @@ export class FinalScreen {
         });
         card.addChild(btn);
 
-        card.x = (sw - cardBg.width) / 2;
+        card.x = (sw - cardW) / 2;
         card.y = 70;
         this.contentLayer.addChild(card);
 
@@ -509,7 +511,9 @@ export class FinalScreen {
                     );
                 }
 
-                setTimeout(() => {
+                if (this._questionTimeout) clearTimeout(this._questionTimeout);
+                this._questionTimeout = setTimeout(() => {
+                    this._questionTimeout = null;
                     if (playerIndex === 1) {
                         this.startP2StepForward();
                     } else {
@@ -626,13 +630,18 @@ export class FinalScreen {
             });
 
             if (progress >= 1.0) {
-                this.app.ticker.remove(meterAnim);
-                setTimeout(() => {
+                if (this._meterAnimTicker) {
+                    this.app.ticker.remove(this._meterAnimTicker);
+                    this._meterAnimTicker = null;
+                }
+                this._roastTimeout = setTimeout(() => {
+                    this._roastTimeout = null;
                     this.showFinalRoast();
                 }, 3000);
             }
         };
 
+        this._meterAnimTicker = meterAnim;
         this.app.ticker.add(meterAnim);
     }
 
@@ -814,6 +823,18 @@ export class FinalScreen {
     }
 
     destroy() {
+        if (this._meterAnimTicker) {
+            try { this.app.ticker.remove(this._meterAnimTicker); } catch (e) {}
+            this._meterAnimTicker = null;
+        }
+        if (this._roastTimeout) {
+            clearTimeout(this._roastTimeout);
+            this._roastTimeout = null;
+        }
+        if (this._questionTimeout) {
+            clearTimeout(this._questionTimeout);
+            this._questionTimeout = null;
+        }
         if (this.unsubscribeCommentary) this.unsubscribeCommentary();
         this.container.destroy({ children: true });
     }

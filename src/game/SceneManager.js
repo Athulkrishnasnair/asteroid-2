@@ -81,8 +81,8 @@ export class SceneManager {
         console.log(`[SceneManager] ${this.currentScene} -> ${newScene}`);
         this.currentScene = newScene;
 
-        // Hide transition layer
-        this.transitionContainer.visible = false;
+        // Clear any active transition tickers and listeners
+        this._clearActiveTransition();
 
         if (newScene === "LEVEL1") {
             if (this.trackingHud) this.trackingHud.hide();
@@ -168,9 +168,23 @@ export class SceneManager {
         }
     }
 
+    _clearActiveTransition() {
+        if (this._currentTransitionTicker) {
+            try { this.app.ticker.remove(this._currentTransitionTicker); } catch (e) {}
+            this._currentTransitionTicker = null;
+        }
+        if (this._currentSkipHandler) {
+            window.removeEventListener("keydown", this._currentSkipHandler);
+            window.removeEventListener("pointerup", this._currentSkipHandler);
+            this._currentSkipHandler = null;
+        }
+        this.transitionContainer.visible = false;
+    }
+
     // ─── Generic Cinematic Transition Cutscene ────────────────────────────────
 
     playTransitionCutscene(messageText, nextScene, duration = 3.0) {
+        this._clearActiveTransition();
         this.transitionContainer.removeChildren();
         this.transitionContainer.visible = true;
 
@@ -243,8 +257,10 @@ export class SceneManager {
         promptText.y = bannerBox.y + 130;
         this.transitionContainer.addChild(promptText);
 
+        let finished = false;
         const startTime = Date.now();
         const tickerFunc = () => {
+            if (finished) return;
             const elapsed = (Date.now() - startTime) / 1000;
             for (const s of streaks) {
                 s.y += s.speed;
@@ -261,10 +277,9 @@ export class SceneManager {
         };
 
         const finish = () => {
-            this.app.ticker.remove(tickerFunc);
-            window.removeEventListener("keydown", skipHandler);
-            window.removeEventListener("pointerup", skipHandler);
-            this.transitionContainer.visible = false;
+            if (finished) return;
+            finished = true;
+            this._clearActiveTransition();
             this.changeScene(nextScene);
         };
 
@@ -272,6 +287,9 @@ export class SceneManager {
             if (e.type === "keydown" && e.code !== "Space") return;
             finish();
         };
+
+        this._currentTransitionTicker = tickerFunc;
+        this._currentSkipHandler = skipHandler;
 
         window.addEventListener("keydown", skipHandler);
         window.addEventListener("pointerup", skipHandler);
@@ -281,6 +299,7 @@ export class SceneManager {
     // ─── Level 2 → Level 3 Transit Police Arrest Cutscene ─────────────────────
 
     playTransition23Cutscene() {
+        this._clearActiveTransition();
         this.transitionContainer.removeChildren();
         this.transitionContainer.visible = true;
 
@@ -308,25 +327,28 @@ export class SceneManager {
             "",
             "TO MOVE LEFT — SAY: LEFT",
             "TO MOVE RIGHT — SAY: RIGHT",
-            "TO JUMP — SAY: JUMP",
-            "TO DUCK — SAY: DUCK",
+            "TO JUMP — SAY: UP (OR JUMP)",
+            "TO DUCK — SAY: DOWN (OR DUCK)",
             "",
             "OR USE KEYBOARD: A/D/W/S",
+            "",
+            "[ CLICK OR PRESS SPACE TO ADVANCE ]",
         ];
 
         CUTSCENE_LINES.forEach((txt, i) => {
+            const isPrompt = i === CUTSCENE_LINES.length - 1;
             const t = new Text({
                 text: txt,
                 style: {
                     fontFamily: this.fontFamily,
-                    fontSize: i < 5 ? 12 : 9,
-                    fill: i === 3 ? "#EF4444" : i >= 6 && i <= 9 ? "#38BDF8" : "#E5E7EB",
+                    fontSize: isPrompt ? 8 : (i < 5 ? 12 : 9),
+                    fill: isPrompt ? "#9CA3AF" : (i === 3 ? "#EF4444" : i >= 6 && i <= 9 ? "#38BDF8" : "#E5E7EB"),
                     letterSpacing: 1,
                 },
             });
             t.anchor.set(0.5, 0);
             t.x = w / 2;
-            t.y = h * 0.12 + i * 36;
+            t.y = h * 0.10 + i * 34;
             t.alpha = 0;
             this.transitionContainer.addChild(t);
             lines.push(t);
@@ -341,12 +363,14 @@ export class SceneManager {
             { force: true }
         );
 
+        let finished = false;
         const startTime = Date.now();
         const tickerFunc = () => {
+            if (finished) return;
             const elapsed = (Date.now() - startTime) / 1000;
             sirenFlash.alpha = (Math.sin(elapsed * 8) > 0) ? 0.08 : 0;
 
-            const targetLine = Math.min(lines.length - 1, Math.floor(elapsed / 0.4));
+            const targetLine = Math.min(lines.length - 1, Math.floor(elapsed / 0.35));
             for (let i = 0; i <= targetLine; i++) {
                 if (lines[i].alpha < 1) {
                     lines[i].alpha = Math.min(1, lines[i].alpha + 0.1);
@@ -359,10 +383,9 @@ export class SceneManager {
         };
 
         const finish = () => {
-            this.app.ticker.remove(tickerFunc);
-            window.removeEventListener("keydown", skipHandler);
-            window.removeEventListener("pointerup", skipHandler);
-            this.transitionContainer.visible = false;
+            if (finished) return;
+            finished = true;
+            this._clearActiveTransition();
             this.changeScene("LEVEL3");
         };
 
@@ -370,6 +393,9 @@ export class SceneManager {
             if (e.type === "keydown" && e.code !== "Space") return;
             finish();
         };
+
+        this._currentTransitionTicker = tickerFunc;
+        this._currentSkipHandler = skipHandler;
 
         window.addEventListener("keydown", skipHandler);
         window.addEventListener("pointerup", skipHandler);
@@ -447,17 +473,21 @@ export class SceneManager {
     // ─── Main Game Loop Update ────────────────────────────────────────────────
 
     update(deltaTime) {
-        if (this.currentScene === "LEVEL2" && this.level2) {
-            this.level2.update(deltaTime);
-        }
-        if (this.currentScene === "LEVEL3" && this.level3) {
-            this.level3.update(deltaTime);
-        }
-        if (this.currentScene === "LEVEL4" && this.level4) {
-            this.level4.update(deltaTime);
-        }
-        if (this.currentScene === "FINAL_SCREEN" && this.finalScreen) {
-            this.finalScreen.update(deltaTime);
+        try {
+            if (this.currentScene === "LEVEL2" && this.level2) {
+                this.level2.update(deltaTime);
+            }
+            if (this.currentScene === "LEVEL3" && this.level3) {
+                this.level3.update(deltaTime);
+            }
+            if (this.currentScene === "LEVEL4" && this.level4) {
+                this.level4.update(deltaTime);
+            }
+            if (this.currentScene === "FINAL_SCREEN" && this.finalScreen) {
+                this.finalScreen.update(deltaTime);
+            }
+        } catch (err) {
+            console.error(`[SceneManager] Error in scene update loop (${this.currentScene}):`, err);
         }
     }
 }
