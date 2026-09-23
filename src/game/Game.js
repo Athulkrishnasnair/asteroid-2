@@ -115,13 +115,13 @@ export class Game {
         this.shootCooldownMax = 0.2; // 200 ms between shots when holding left-click
         
 
-        // Add lives
-        this.lives = 3;
-        this.maxLives = 3;
+        // Add 5 lives
+        this.lives = 5;
+        this.maxLives = 5;
 
         // Life text (managed by HUD)
         this.lifeText = new Text({
-            text: "Lives: ❤️❤️❤️",
+            text: "Lives: ❤️❤️❤️❤️❤️",
             style: {
                 fontSize: 24,
                 fill: "white",

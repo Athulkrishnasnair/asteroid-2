@@ -106,7 +106,7 @@ export class HUD {
 
         // Lives display
         this.livesText = new Text({
-            text: "LIVES: ❤️❤️❤️",
+            text: "LIVES: ❤️❤️❤️❤️❤️",
             style: {
                 fontFamily: this.fontFamily,
                 fontSize: 14,
@@ -281,7 +281,7 @@ export class HUD {
 
     reset() {
         this.updateScore(0);
-        this.updateLives(3, 3);
+        this.updateLives(5, 5);
         this.updatePowerUp(false, 0);
         this.setObjective("OBJ: SURVIVE & DESTROY GOLDEN SHIP");
         this.dialogueBox.visible = false;

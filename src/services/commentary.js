@@ -31,6 +31,10 @@ class CommentaryManager {
             subwayDistance: 0,
             p1PowerScore: 78,
             p2PowerScore: 92,
+            level4P1Reps: 0,
+            level4P2Reps: 0,
+            level5Smiles: 0,
+            level5Cleared: true,
             p1Expertise: "Programming",
             p2Expertise: "Gaming",
         };

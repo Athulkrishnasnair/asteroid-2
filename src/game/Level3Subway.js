@@ -52,10 +52,16 @@ export class Level3Subway {
             isDucking: false,
             duckTimer: 0,
             duckDuration: 0.7,
+            invulnerableTimer: 0,
             sprite: new Container(),
             aura: null,
             score: 0,
         };
+
+        // 5-heart system
+        this.lives = 5;
+        this.maxLives = 5;
+        this.gameOver = false;
 
         // Track progression and speed
         this.speed = 5.2; // Ramps up from 5.2 to 10.0
@@ -77,7 +83,7 @@ export class Level3Subway {
         this.roastCooldown = 2.5;
         this.escalationStages = [20, 40, 52];
 
-        // Web Speech API Voice Recognizer adapter (with Whisper backup available)
+        // Web Speech API Voice Recognizer adapter (preferring en-IN)
         this.voiceRecognizer = createVoiceRecognizer("webspeech");
 
         // TEST MODE (CTRL + \) configuration
@@ -271,6 +277,19 @@ export class Level3Subway {
         this.titleText.y = 16;
         this.uiLayer.addChild(this.titleText);
 
+        // 5-Heart Life Display
+        this.livesText = new Text({
+            text: "LIVES: ❤️❤️❤️❤️❤️",
+            style: {
+                fontFamily: this.fontFamily,
+                fontSize: 10,
+                fill: "#EF4444",
+            },
+        });
+        this.livesText.x = 18;
+        this.livesText.y = 36;
+        this.uiLayer.addChild(this.livesText);
+
         // Voice Command Recognition HUD Tag
         this.cmdBadge = new Text({
             text: "VOICE INPUT: LISTENING... [KEYBOARD OVERRIDE ACTIVE]",
@@ -281,7 +300,7 @@ export class Level3Subway {
             },
         });
         this.cmdBadge.x = 18;
-        this.cmdBadge.y = 38;
+        this.cmdBadge.y = 56;
         this.uiLayer.addChild(this.cmdBadge);
 
         // Score & Speed meters
@@ -294,7 +313,7 @@ export class Level3Subway {
             },
         });
         this.statsText.x = 18;
-        this.statsText.y = 58;
+        this.statsText.y = 76;
         this.uiLayer.addChild(this.statsText);
 
         // Shortcut hint tag
@@ -307,8 +326,62 @@ export class Level3Subway {
             },
         });
         this.shortcutBadge.x = 18;
-        this.shortcutBadge.y = 78;
+        this.shortcutBadge.y = 96;
         this.uiLayer.addChild(this.shortcutBadge);
+
+        // Game Over Overlay Container
+        this.gameOverBox = new Container();
+        const goBg = new Graphics();
+        goBg.roundRect(0, 0, 480, 140, 8);
+        goBg.fill({ color: 0x0a0e14, alpha: 0.95 });
+        goBg.stroke({ color: 0xef4444, width: 3 });
+        this.gameOverBox.addChild(goBg);
+
+        const goTitle = new Text({
+            text: "SUBWAY PURSUIT FAILED",
+            style: { fontFamily: this.fontFamily, fontSize: 13, fill: "#EF4444" },
+        });
+        goTitle.anchor.set(0.5);
+        goTitle.x = 240;
+        goTitle.y = 38;
+        this.gameOverBox.addChild(goTitle);
+
+        const goSub = new Text({
+            text: "PRESS R OR CLICK TO RETRY",
+            style: { fontFamily: this.fontFamily, fontSize: 9, fill: "#FBBF24" },
+        });
+        goSub.anchor.set(0.5);
+        goSub.x = 240;
+        goSub.y = 76;
+        this.gameOverBox.addChild(goSub);
+
+        const retryBtn = new Container();
+        const rBg = new Graphics();
+        rBg.roundRect(0, 0, 180, 30, 4);
+        rBg.fill({ color: 0x1e293b });
+        rBg.stroke({ color: 0x38bdf8, width: 1.5 });
+        retryBtn.addChild(rBg);
+
+        const rText = new Text({
+            text: "[ RETRY RUN ]",
+            style: { fontFamily: this.fontFamily, fontSize: 8, fill: "#38BDF8" },
+        });
+        rText.anchor.set(0.5);
+        rText.x = 90;
+        rText.y = 15;
+        retryBtn.addChild(rText);
+
+        retryBtn.x = 150;
+        retryBtn.y = 96;
+        retryBtn.eventMode = "static";
+        retryBtn.cursor = "pointer";
+        retryBtn.on("pointertap", () => this.restart());
+        this.gameOverBox.addChild(retryBtn);
+
+        this.gameOverBox.x = (this.app.screen.width - 480) / 2;
+        this.gameOverBox.y = (this.app.screen.height - 140) / 2;
+        this.gameOverBox.visible = false;
+        this.uiLayer.addChild(this.gameOverBox);
 
         // Subtitle dialogue box (bottom center)
         this.dialogueBox = new Container();
@@ -617,8 +690,22 @@ export class Level3Subway {
     }
 
     update(deltaTime) {
+        if (this.gameOver) {
+            if (this.input && (this.input.wasPressed("r") || this.input.wasPressed("R"))) {
+                this.restart();
+            }
+            return;
+        }
+
         const dtSec = deltaTime / 60;
         this.runTimer += dtSec;
+
+        if (this.player.invulnerableTimer > 0) {
+            this.player.invulnerableTimer -= dtSec;
+            this.player.sprite.alpha = Math.floor(this.player.invulnerableTimer * 10) % 2 === 0 ? 0.4 : 0.9;
+        } else {
+            this.player.sprite.alpha = 1.0;
+        }
 
         // Position Alien Officer HUD card in top right
         this.alienCard.x = this.app.screen.width - 176;
@@ -744,12 +831,7 @@ export class Level3Subway {
 
                         // When in TEST MODE, disable all penalties and consequences
                         if (!this.testMode) {
-                            if (this.soundManager) this.soundManager.playCrash();
-                            commentary.recordStat("subwayHits");
-                            commentary.roast("SUBWAY_CRASH", {}, { textOnly: true });
-                            // Flash red visual effect
-                            this.player.sprite.alpha = 0.4;
-                            setTimeout(() => { if (this.player && this.player.sprite && !this.player.sprite.destroyed) this.player.sprite.alpha = 1.0; }, 180);
+                            this.loseHeart();
                         } else {
                             // Harmless ghost pass in test mode
                             this.player.sprite.alpha = 0.8;
@@ -766,6 +848,75 @@ export class Level3Subway {
                 this.obstacles.splice(i, 1);
             }
         }
+    }
+
+    updateLivesText() {
+        if (!this.livesText) return;
+        const hearts = "❤️".repeat(Math.max(0, this.lives));
+        const empty = "🖤".repeat(Math.max(0, this.maxLives - this.lives));
+        this.livesText.text = `LIVES: ${hearts}${empty}`;
+    }
+
+    loseHeart() {
+        if (this.gameOver || this.player.invulnerableTimer > 0) return;
+        this.lives--;
+        this.updateLivesText();
+
+        if (this.soundManager) this.soundManager.playCrash();
+        commentary.recordStat("subwayHits");
+
+        // Invulnerability period
+        this.player.invulnerableTimer = 1.5;
+        this.player.sprite.alpha = 0.4;
+        setTimeout(() => {
+            if (this.player && this.player.sprite && !this.player.sprite.destroyed) {
+                this.player.sprite.alpha = 1.0;
+            }
+        }, 300);
+
+        if (this.lives <= 0) {
+            this.gameOver = true;
+            if (this.gameOverBox) this.gameOverBox.visible = true;
+            if (this.soundManager) this.soundManager.playCancel();
+            commentary.say("Transit collision critical! Protocol terminated.", { textOnly: true });
+        }
+    }
+
+    resetHearts() {
+        this.lives = this.maxLives;
+        this.updateLivesText();
+        this.gameOver = false;
+        if (this.gameOverBox) this.gameOverBox.visible = false;
+    }
+
+    restart() {
+        this.lives = this.maxLives;
+        this.updateLivesText();
+        this.gameOver = false;
+        if (this.gameOverBox) this.gameOverBox.visible = false;
+
+        this.player.lane = 0;
+        this.player.x = this.centerX;
+        this.player.y = this.playerBaseY;
+        this.player.targetX = this.centerX;
+        this.player.isJumping = false;
+        this.player.isDucking = false;
+        this.player.jumpY = 0;
+        this.player.invulnerableTimer = 0;
+        this.player.score = 0;
+        this.player.sprite.alpha = 1.0;
+
+        // Clear existing obstacles
+        for (const obs of this.obstacles) {
+            this.obstacleLayer.removeChild(obs.sprite);
+            obs.sprite.destroy();
+        }
+        this.obstacles = [];
+        this.spawnTimer = 0;
+        this.speed = 5.2;
+        this.runTimer = 0;
+        this.captureTriggered = false;
+        this.escalationStages = [20, 40, 52];
     }
 
     handleCaptureProgression(dtSec) {

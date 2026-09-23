@@ -1,7 +1,3 @@
-// src/game/SoundManager.js
-// Lightweight audio manager for 8/16-bit sound effects.
-// Handles browser autoplay restrictions, pre-buffering, and spam prevention.
-
 import sfxShoot from "../assets/8-16bit+Sound+assets+(x25)/sfx pack/Blow 1.wav";
 import sfxExplosion from "../assets/8-16bit+Sound+assets+(x25)/sfx pack/Explosion2.wav";
 import sfxHitDamage from "../assets/8-16bit+Sound+assets+(x25)/sfx pack/Hit damage 1.wav";
@@ -15,6 +11,7 @@ import sfxDuck from "../assets/8-16bit+Sound+assets+(x25)/sfx pack/Suck 1V2.wav"
 import sfxCrash from "../assets/8-16bit+Sound+assets+(x25)/sfx pack/Block Break 1.wav";
 import sfxSelect from "../assets/8-16bit+Sound+assets+(x25)/sfx pack/Confirm 1.wav";
 import sfxCancel from "../assets/8-16bit+Sound+assets+(x25)/sfx pack/Cancel 1.wav";
+import sfxBubble from "../assets/8-16bit+Sound+assets+(x25)/sfx pack/Bubble 1.wav";
 
 export class SoundManager {
     constructor() {
@@ -37,8 +34,11 @@ export class SoundManager {
             crash: { src: sfxCrash, volume: 0.55, minInterval: 150 },
             select: { src: sfxSelect, volume: 0.4, minInterval: 100 },
             cancel: { src: sfxCancel, volume: 0.4, minInterval: 100 },
+            repCount: { src: sfxSelect, volume: 0.5, minInterval: 150 },
+            countdown: { src: sfxDialogue, volume: 0.4, minInterval: 200 },
+            smileAlert: { src: sfxBubble, volume: 0.5, minInterval: 300 },
+            laughFail: { src: sfxCancel, volume: 0.6, minInterval: 400 },
         };
-
 
         this.initPools();
         this.bindUnlock();
@@ -69,7 +69,6 @@ export class SoundManager {
     bindUnlock() {
         const unlock = () => {
             this.unlocked = true;
-            // Warm up one audio element to satisfy browser policy
             try {
                 if (this.sounds.shoot && this.sounds.shoot[0]) {
                     this.sounds.shoot[0].play().then(() => {
@@ -109,66 +108,30 @@ export class SoundManager {
             audioToPlay.volume = config.volume;
             const playPromise = audioToPlay.play();
             if (playPromise !== undefined) {
-                playPromise.catch(() => {
-                    // Autoplay restriction or decode error: ignore gracefully
-                });
+                playPromise.catch(() => {});
             }
         } catch (err) {
             // Audio failure should never crash the game
         }
     }
 
-    playShoot() {
-        this.play("shoot");
-    }
-
-    playAlienExplosion() {
-        this.play("explosion");
-    }
-
-    playPlayerHit() {
-        this.play("playerHit");
-    }
-
-    playPowerUp() {
-        this.play("powerUp");
-    }
-
-    playGoldenSpawn() {
-        this.play("goldSpawn");
-    }
-
-    playGoldenHit() {
-        this.play("goldHit");
-    }
-
-    playLevelComplete() {
-        this.play("levelComplete");
-    }
-
-    playDialogue() {
-        this.play("dialogue");
-    }
-
-    playJump() {
-        this.play("jump");
-    }
-
-    playDuck() {
-        this.play("duck");
-    }
-
-    playCrash() {
-        this.play("crash");
-    }
-
-    playSelect() {
-        this.play("select");
-    }
-
-    playCancel() {
-        this.play("cancel");
-    }
+    playShoot() { this.play("shoot"); }
+    playAlienExplosion() { this.play("explosion"); }
+    playPlayerHit() { this.play("playerHit"); }
+    playPowerUp() { this.play("powerUp"); }
+    playGoldenSpawn() { this.play("goldSpawn"); }
+    playGoldenHit() { this.play("goldHit"); }
+    playLevelComplete() { this.play("levelComplete"); }
+    playDialogue() { this.play("dialogue"); }
+    playJump() { this.play("jump"); }
+    playDuck() { this.play("duck"); }
+    playCrash() { this.play("crash"); }
+    playSelect() { this.play("select"); }
+    playCancel() { this.play("cancel"); }
+    playRepCount() { this.play("repCount"); }
+    playCountdown() { this.play("countdown"); }
+    playSmileAlert() { this.play("smileAlert"); }
+    playLaughFail() { this.play("laughFail"); }
 }
 
 

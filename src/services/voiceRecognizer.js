@@ -7,7 +7,7 @@
 import { voice } from "./voice.js";
 
 // Valid vocabulary strictly allowed for Level 3
-export const VALID_COMMANDS = Object.freeze(["LEFT", "RIGHT", "UP", "DOWN"]);
+export const VALID_COMMANDS = Object.freeze(["LEFT", "RIGHT", "UP", "DOWN", "JUMP", "DUCK"]);
 
 /**
  * Normalizes speech transcript:
@@ -27,8 +27,7 @@ export function normalizeTranscript(text) {
 
 /**
  * Extracts valid Level 3 commands from normalized text in utterance order.
- * Strictly recognizes: left, right, up, down.
- * Does not use aggressive fuzzy matching.
+ * Strictly recognizes: left, right, up, down, jump, duck.
  */
 export function extractCommands(normalizedText) {
     if (!normalizedText) return [];
@@ -38,8 +37,8 @@ export function extractCommands(normalizedText) {
     for (const token of tokens) {
         if (token === "left") matches.push("LEFT");
         else if (token === "right") matches.push("RIGHT");
-        else if (token === "up") matches.push("UP");
-        else if (token === "down") matches.push("DOWN");
+        else if (token === "up" || token === "jump" || token === "hop") matches.push("UP");
+        else if (token === "down" || token === "duck" || token === "slide") matches.push("DOWN");
     }
 
     return matches;
@@ -159,7 +158,6 @@ export class WebSpeechRecognizer {
                 }
             })
             .catch((err) => {
-                // Mic permission error or unavailable
                 console.warn("[WebSpeechRecognizer] Microphone getUserMedia notice:", err);
             });
     }
@@ -169,13 +167,14 @@ export class WebSpeechRecognizer {
             this.recognition = new SpeechRec();
             this.recognition.continuous = true;
             this.recognition.interimResults = true;
-            this.recognition.lang = "en-US";
+            // Primary preference: en-IN (Indian English) when supported, fallback to en-US
+            this.recognition.lang = "en-IN";
             this.recognition.maxAlternatives = 1;
 
             this.recognition.onstart = () => {
                 this._isStarting = false;
                 this.isListening = true;
-                this._status = "LISTENING";
+                this._status = "LISTENING (en-IN)";
                 this._reportDebug();
             };
 
@@ -187,10 +186,16 @@ export class WebSpeechRecognizer {
             this.recognition.onerror = (event) => {
                 const errorType = event.error || "unknown";
                 if (errorType === "no-speech") {
-                    // Normal timeout during silence
                     return;
                 }
                 if (errorType === "aborted") {
+                    return;
+                }
+
+                // If en-IN fails with language-not-supported, fallback to en-US
+                if (errorType === "language-not-supported" && this.recognition.lang === "en-IN") {
+                    console.warn("[WebSpeechRecognizer] en-IN not supported on this engine, falling back to en-US");
+                    this.recognition.lang = "en-US";
                     return;
                 }
 
@@ -211,7 +216,6 @@ export class WebSpeechRecognizer {
                 this.isListening = false;
                 this._isStarting = false;
 
-                // Automatic restart if recognition ended unexpectedly while active
                 if (!this._explicitlyStopped && this.isActive) {
                     this._status = "RESTARTING";
                     this._reportDebug();
@@ -243,7 +247,6 @@ export class WebSpeechRecognizer {
             this.recognition.start();
         } catch (e) {
             this._isStarting = false;
-            // In case start was called when already active
             if (e.name !== "InvalidStateError") {
                 console.warn("[WebSpeechRecognizer] Start warning:", e);
             }
@@ -271,7 +274,6 @@ export class WebSpeechRecognizer {
             this._rawTranscript = rawText;
             this._normalizedTranscript = normalized;
 
-            // Retrieve count of already emitted commands for this specific result index
             const alreadyEmitted = this._handledCommandCounts.get(i) || 0;
 
             if (commands.length > alreadyEmitted) {
@@ -279,7 +281,6 @@ export class WebSpeechRecognizer {
                     const cmd = commands[c];
                     const now = performance.now();
 
-                    // Short refractory gate to avoid acoustic micro-stutter
                     if (now - this._lastCommandTime >= this._commandCooldownMs) {
                         this._lastCommandTime = now;
                         this._detectedCommand = cmd;
@@ -299,7 +300,6 @@ export class WebSpeechRecognizer {
                 this._detectedCommand = "NONE";
             }
 
-            // Prune memory for older finalized results
             if (res.isFinal && i > 20) {
                 this._handledCommandCounts.delete(i - 20);
             }
@@ -447,14 +447,22 @@ export class WhisperRecognizer {
 }
 
 /**
- * Recognizer Factory / Adapter
- * By default creates WebSpeechRecognizer for the experiment.
- * Switch to 'whisper' at any time if needed as a backup.
+ * SpeechRecognitionManager / Recognizer Factory
+ * By default creates WebSpeechRecognizer (primary: en-IN).
+ * Fallback to WhisperRecognizer when Web Speech is unsupported or requested.
  */
 export function createVoiceRecognizer(mode = "webspeech") {
-    if (mode === "whisper") {
+    if (mode === "whisper" || (!WebSpeechRecognizer.isSupported() && mode === "webspeech")) {
         return new WhisperRecognizer();
     }
     return new WebSpeechRecognizer();
 }
+
+export const SpeechRecognitionManager = {
+    create: createVoiceRecognizer,
+    WebSpeech: WebSpeechRecognizer,
+    Whisper: WhisperRecognizer,
+    normalize: normalizeTranscript,
+    extract: extractCommands,
+};
 

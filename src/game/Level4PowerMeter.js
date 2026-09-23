@@ -1,11 +1,151 @@
 // src/game/Level4PowerMeter.js
-// Level 4 — Central Vienium Alien Power-O-Meter
-// Players assume a power pose / raise their hands to charge an absurd fictional
-// cosmic power meter. Generates fictional Alien Units scores and reactions.
-// Added: Webcam PiP overlay so players can see themselves during the pose test.
+// Level 4 — Central Vienium Alien Power-O-Meter: Real Bicep Curl Showdown
+// Computer Vision powered by MediaPipe PoseLandmarker.
+// Tracks real elbow angles for Player 1 & Player 2:
+// EXTENDED -> CURLING -> CONTRACTED -> RETURNING -> REP COMPLETE.
+// Features: Real-time rep comparison, 20s showdown timer, live PiP skeleton overlay,
+// smoothing, cooldowns, manual fallback, funny alien commentary, and Level 5 transition.
 
 import { Container, Graphics, Text, Sprite, AnimatedSprite } from "pixi.js";
+import { PoseLandmarker, FilesetResolver } from "@mediapipe/tasks-vision";
 import { commentary } from "../services/commentary.js";
+
+const WASM_BASE_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm";
+const POSE_MODEL_URL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
+
+// Pose Landmark Indices
+const L_SHOULDER = 11;
+const R_SHOULDER = 12;
+const L_ELBOW = 13;
+const R_ELBOW = 14;
+const L_WRIST = 15;
+const R_WRIST = 16;
+
+/**
+ * Calculates 2D interior angle between three points (A -> B -> C) at vertex B in degrees.
+ */
+export function calculateAngle(a, b, c) {
+    if (!a || !b || !c) return 180;
+    const bax = a.x - b.x;
+    const bay = a.y - b.y;
+    const bcx = c.x - b.x;
+    const bcy = c.y - b.y;
+
+    const dot = bax * bcx + bay * bcy;
+    const magBA = Math.hypot(bax, bay);
+    const magBC = Math.hypot(bcx, bcy);
+
+    if (magBA === 0 || magBC === 0) return 180;
+    const cosAngle = Math.max(-1, Math.min(1, dot / (magBA * magBC)));
+    return (Math.acos(cosAngle) * 180) / Math.PI;
+}
+
+/**
+ * Robust 5-stage Bicep Curl State Machine
+ */
+export class BicepRepTracker {
+    constructor(playerId) {
+        this.playerId = playerId;
+        this.state = "EXTENDED"; // EXTENDED -> CURLING -> CONTRACTED -> RETURNING -> COMPLETE
+        this.reps = 0;
+        this.currentAngle = 180;
+        this.smoothedAngle = 180;
+        this.lastRepTime = 0;
+        this.minRepCooldownMs = 400; // Minimum 400ms between completed reps
+        this.extendedThreshold = 135; // Angle > 135° considered extended
+        this.contractedThreshold = 75; // Angle < 75° considered contracted
+        this.armUsed = "RIGHT";
+        this.landmarks = null;
+    }
+
+    update(landmarks, nowMs) {
+        this.landmarks = landmarks;
+        if (!landmarks || landmarks.length === 0) return;
+
+        // Calculate left and right arm angles
+        const lShoulder = landmarks[L_SHOULDER];
+        const lElbow = landmarks[L_ELBOW];
+        const lWrist = landmarks[L_WRIST];
+
+        const rShoulder = landmarks[R_SHOULDER];
+        const rElbow = landmarks[R_ELBOW];
+        const rWrist = landmarks[R_WRIST];
+
+        let leftAngle = 180;
+        let rightAngle = 180;
+
+        if (lShoulder && lElbow && lWrist) {
+            leftAngle = calculateAngle(lShoulder, lElbow, lWrist);
+        }
+        if (rShoulder && rElbow && rWrist) {
+            rightAngle = calculateAngle(rShoulder, rElbow, rWrist);
+        }
+
+        // Choose arm that is more curled (smaller angle)
+        let activeAngle = rightAngle;
+        this.armUsed = "RIGHT";
+        if (leftAngle < rightAngle) {
+            activeAngle = leftAngle;
+            this.armUsed = "LEFT";
+        }
+
+        this.currentAngle = activeAngle;
+        // Exponential moving average smoothing
+        this.smoothedAngle = this.smoothedAngle * 0.65 + activeAngle * 0.35;
+
+        // State Machine evaluation
+        let repCompleted = false;
+
+        switch (this.state) {
+            case "EXTENDED":
+                if (this.smoothedAngle < 125) {
+                    this.state = "CURLING";
+                }
+                break;
+
+            case "CURLING":
+                if (this.smoothedAngle < this.contractedThreshold) {
+                    this.state = "CONTRACTED";
+                } else if (this.smoothedAngle > this.extendedThreshold + 10) {
+                    this.state = "EXTENDED"; // Reset if dropped without contracting
+                }
+                break;
+
+            case "CONTRACTED":
+                if (this.smoothedAngle > 95) {
+                    this.state = "RETURNING";
+                }
+                break;
+
+            case "RETURNING":
+                if (this.smoothedAngle > this.extendedThreshold) {
+                    if (nowMs - this.lastRepTime >= this.minRepCooldownMs) {
+                        this.reps++;
+                        this.lastRepTime = nowMs;
+                        repCompleted = true;
+                    }
+                    this.state = "EXTENDED";
+                }
+                break;
+        }
+
+        return repCompleted;
+    }
+
+    injectRep() {
+        this.reps++;
+        this.lastRepTime = performance.now();
+        return true;
+    }
+
+    reset() {
+        this.state = "EXTENDED";
+        this.reps = 0;
+        this.currentAngle = 180;
+        this.smoothedAngle = 180;
+        this.lastRepTime = 0;
+    }
+}
 
 export class Level4PowerMeter {
     constructor({ app, input, soundManager, textures, faceTracker, onComplete }) {
@@ -27,19 +167,28 @@ export class Level4PowerMeter {
 
         this.fontFamily = "'Press Start 2P', monospace";
 
-        this.state = "INTRO"; // INTRO -> CHARGING -> REVEAL_P1 -> REVEAL_P2 -> COMPLETE
+        // Game Flow State:
+        // INTRO -> COUNTDOWN -> SHOWDOWN -> REVEAL -> COMPLETE
+        this.state = "INTRO";
         this.stateTimer = 0;
+        this.showdownDuration = 20; // 20-second Bicep Showdown
+        this.showdownRemaining = this.showdownDuration;
+        this.countdownValue = 3;
 
-        // Fictional Game Scores
-        this.p1Score = 0;
-        this.p2Score = 0;
-        this.targetP1Score = 78 + Math.floor(Math.random() * 18);
-        this.targetP2Score = 84 + Math.floor(Math.random() * 14);
+        // Player Bicep Trackers
+        this.p1Tracker = new BicepRepTracker(1);
+        this.p2Tracker = new BicepRepTracker(2);
 
-        this.chargeProgress = 0; // 0 to 1
-        this.poseDetected = false;
-        this.chargingSparks = [];
-        this._pipRaf = null;
+        // MediaPipe PoseLandmarker
+        this.poseLandmarker = null;
+        this.poseRunning = false;
+        this.poseOffline = false;
+        this.video = null;
+        this.poseRaf = null;
+
+        // 5-heart system
+        this.lives = 5;
+        this.maxLives = 5;
 
         this.initBackground();
         this.initMeterUI();
@@ -47,13 +196,125 @@ export class Level4PowerMeter {
         this.initDialogueBox();
         this.initWebcamPiP();
 
-        // Start Level 4 Introduction
+        // Start MediaPipe Pose Detection
+        this.initMediaPipePose();
+
+        // Intro Commentary
         setTimeout(() => {
             commentary.say(
-                "Central Vienium Physical Evaluation Protocol active. Behold: THE ALIEN POWER-O-METER! Assume the cosmic power pose to charge the capacitor.",
+                "Central Vienium Physical Evaluation Protocol active! BICEP CURL SHOWDOWN! Player 1 vs Player 2. Reps are monitored by celestial computer vision.",
                 { force: true }
             );
-        }, 500);
+        }, 600);
+    }
+
+    async initMediaPipePose() {
+        try {
+            const vision = await FilesetResolver.forVisionTasks(WASM_BASE_URL);
+            this.poseLandmarker = await PoseLandmarker.createFromOptions(vision, {
+                baseOptions: {
+                    modelAssetPath: POSE_MODEL_URL,
+                    delegate: "GPU",
+                },
+                runningMode: "VIDEO",
+                numPoses: 2,
+                minPoseDetectionConfidence: 0.45,
+                minPosePresenceConfidence: 0.45,
+                minTrackingConfidence: 0.45,
+            });
+
+            // Borrow video element from faceTracker if available, or create one
+            if (this.faceTracker && this.faceTracker.getVideoElement()) {
+                this.video = this.faceTracker.getVideoElement();
+            } else {
+                this.video = document.createElement("video");
+                this.video.style.display = "none";
+                this.video.playsInline = true;
+                this.video.muted = true;
+                document.body.appendChild(this.video);
+
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { width: 640, height: 480 },
+                    audio: false,
+                });
+                this.video.srcObject = stream;
+                await this.video.play();
+                this._createdStream = stream;
+            }
+
+            this.poseRunning = true;
+            this.poseOffline = false;
+            this._startPoseLoop();
+        } catch (err) {
+            console.warn("[Level 4] MediaPipe Pose Landmarker notice (falling back to manual / simulated CV):", err);
+            this.poseOffline = true;
+        }
+    }
+
+    _startPoseLoop() {
+        const loop = () => {
+            if (!this.poseRunning) return;
+            const now = performance.now();
+
+            if (this.video && this.video.readyState >= 2 && this.poseLandmarker) {
+                try {
+                    const result = this.poseLandmarker.detectForVideo(this.video, now);
+                    if (result && result.landmarks && result.landmarks.length > 0) {
+                        // Sort poses horizontally: Leftmost pose = Player 1, Rightmost = Player 2
+                        const sortedPoses = [...result.landmarks].sort((a, b) => {
+                            const ax = (a[L_SHOULDER]?.x || 0.5 + a[R_SHOULDER]?.x || 0.5) / 2;
+                            const bx = (b[L_SHOULDER]?.x || 0.5 + b[R_SHOULDER]?.x || 0.5) / 2;
+                            return ax - bx;
+                        });
+
+                        const p1Landmarks = sortedPoses[0] || null;
+                        const p2Landmarks = sortedPoses[1] || null;
+
+                        if (this.state === "SHOWDOWN") {
+                            if (p1Landmarks) {
+                                const p1Rep = this.p1Tracker.update(p1Landmarks, now);
+                                if (p1Rep) this.onRepDetected(1);
+                            }
+                            if (p2Landmarks) {
+                                const p2Rep = this.p2Tracker.update(p2Landmarks, now);
+                                if (p2Rep) this.onRepDetected(2);
+                            }
+                        } else {
+                            if (p1Landmarks) this.p1Tracker.update(p1Landmarks, now);
+                            if (p2Landmarks) this.p2Tracker.update(p2Landmarks, now);
+                        }
+                    }
+                } catch (e) {
+                    // Ignore transient frame detection drops
+                }
+            }
+
+            this.poseRaf = requestAnimationFrame(loop);
+        };
+
+        this.poseRaf = requestAnimationFrame(loop);
+    }
+
+    onRepDetected(playerNum) {
+        if (this.soundManager) this.soundManager.playRepCount();
+        console.log(`[Level 4] Player ${playerNum} BICEP REP COUNTED! (P1: ${this.p1Tracker.reps}, P2: ${this.p2Tracker.reps})`);
+
+        // Visual bounce on meter
+        const meter = playerNum === 1 ? this.p1Meter : this.p2Meter;
+        if (meter) {
+            meter.scale.set(1.06);
+            setTimeout(() => { meter.scale.set(1.0); }, 120);
+        }
+    }
+
+    injectRep(playerNum) {
+        if (playerNum === 1) {
+            this.p1Tracker.injectRep();
+            this.onRepDetected(1);
+        } else {
+            this.p2Tracker.injectRep();
+            this.onRepDetected(2);
+        }
     }
 
     initBackground() {
@@ -65,7 +326,7 @@ export class Level4PowerMeter {
         bg.fill({ color: 0x070a10 });
         this.bgLayer.addChild(bg);
 
-        // Grid lines
+        // Cyber Grid Lines
         const grid = new Graphics();
         for (let x = 0; x < sw; x += 40) {
             grid.moveTo(x, 0);
@@ -75,7 +336,7 @@ export class Level4PowerMeter {
             grid.moveTo(0, y);
             grid.lineTo(sw, y);
         }
-        grid.stroke({ color: 0x1e293b, width: 1, alpha: 0.3 });
+        grid.stroke({ color: 0x1e293b, width: 1, alpha: 0.35 });
         this.bgLayer.addChild(grid);
     }
 
@@ -85,10 +346,10 @@ export class Level4PowerMeter {
 
         // Title Header
         this.titleText = new Text({
-            text: "LEVEL 4: ALIEN POWER-O-METER // CELESTIAL POWER POSE TEST",
+            text: "LEVEL 4: BICEP SHOWDOWN // MEDIAPIPE POSE BICEP CURL COMPARISON",
             style: {
                 fontFamily: this.fontFamily,
-                fontSize: 11,
+                fontSize: 10.5,
                 fill: "#F59E0B",
                 letterSpacing: 1,
             },
@@ -98,9 +359,9 @@ export class Level4PowerMeter {
         this.titleText.y = 16;
         this.uiLayer.addChild(this.titleText);
 
-        // Instruction sub-banner
+        // Instruction / Status Banner
         this.subText = new Text({
-            text: "RAISE BOTH HANDS / STRIKE A POWER POSE (OR HOLD SPACEBAR TO CHARGE)",
+            text: "PREPARE TO CURL // MONITORING BOTH PLAYERS VIA WEBCAM",
             style: {
                 fontFamily: this.fontFamily,
                 fontSize: 9,
@@ -113,21 +374,21 @@ export class Level4PowerMeter {
         this.uiLayer.addChild(this.subText);
 
         // Large Dual Meters Frame
-        const meterBoxW = Math.min(680, sw - 40);
-        const meterBoxH = 220;
+        const meterBoxW = Math.min(740, sw - 36);
+        const meterBoxH = 240;
         const meterBoxX = (sw - meterBoxW) / 2;
-        const meterBoxY = 70;
+        const meterBoxY = 66;
 
         const frameBg = new Graphics();
         frameBg.roundRect(meterBoxX, meterBoxY, meterBoxW, meterBoxH, 8);
-        frameBg.fill({ color: 0x0b111e, alpha: 0.95 });
+        frameBg.fill({ color: 0x0b111e, alpha: 0.96 });
         frameBg.stroke({ color: 0x38bdf8, width: 3 });
         this.meterLayer.addChild(frameBg);
 
-        // Player 1 Gauge Container
+        // Player 1 Gauge Container (Left)
         this.p1Meter = new Container();
-        this.p1Meter.x = meterBoxX + 40;
-        this.p1Meter.y = meterBoxY + 30;
+        this.p1Meter.x = meterBoxX + 30;
+        this.p1Meter.y = meterBoxY + 24;
 
         const p1Title = new Text({
             text: "PLAYER 1: PILOT",
@@ -135,8 +396,16 @@ export class Level4PowerMeter {
         });
         this.p1Meter.addChild(p1Title);
 
+        this.p1RepBig = new Text({
+            text: "0 REPS",
+            style: { fontFamily: this.fontFamily, fontSize: 24, fill: "#22C55E" },
+        });
+        this.p1RepBig.x = 0;
+        this.p1RepBig.y = 24;
+        this.p1Meter.addChild(this.p1RepBig);
+
         this.p1BarBg = new Graphics();
-        this.p1BarBg.roundRect(0, 26, 260, 36, 4);
+        this.p1BarBg.roundRect(0, 64, 280, 24, 4);
         this.p1BarBg.fill({ color: 0x1f2937 });
         this.p1BarBg.stroke({ color: 0x374151, width: 2 });
         this.p1Meter.addChild(this.p1BarBg);
@@ -144,28 +413,59 @@ export class Level4PowerMeter {
         this.p1BarFill = new Graphics();
         this.p1Meter.addChild(this.p1BarFill);
 
-        this.p1ScoreText = new Text({
-            text: "CHARGING...",
-            style: { fontFamily: this.fontFamily, fontSize: 11, fill: "#FFF" },
+        this.p1StateTag = new Text({
+            text: "STATE: EXTENDED (180°)",
+            style: { fontFamily: this.fontFamily, fontSize: 7.5, fill: "#9CA3AF" },
         });
-        this.p1ScoreText.x = 10;
-        this.p1ScoreText.y = 38;
-        this.p1Meter.addChild(this.p1ScoreText);
+        this.p1StateTag.x = 0;
+        this.p1StateTag.y = 96;
+        this.p1Meter.addChild(this.p1StateTag);
 
-        this.p1UnitsText = new Text({
-            text: "-- ALIEN UNITS",
-            style: { fontFamily: this.fontFamily, fontSize: 9, fill: "#22C55E" },
-        });
-        this.p1UnitsText.x = 0;
-        this.p1UnitsText.y = 74;
-        this.p1Meter.addChild(this.p1UnitsText);
+        // Manual P1 Curl Button
+        const p1Btn = new Container();
+        const p1BtnBg = new Graphics();
+        p1BtnBg.roundRect(0, 0, 130, 24, 3);
+        p1BtnBg.fill({ color: 0x14532d });
+        p1BtnBg.stroke({ color: 0x22c55e, width: 1.5 });
+        p1Btn.addChild(p1BtnBg);
+        const p1BtnTxt = new Text({ text: "[ +1 P1 CURL ]", style: { fontFamily: this.fontFamily, fontSize: 7, fill: "#FFF" } });
+        p1BtnTxt.anchor.set(0.5);
+        p1BtnTxt.x = 65; p1BtnTxt.y = 12;
+        p1Btn.addChild(p1BtnTxt);
+        p1Btn.x = 0; p1Btn.y = 120;
+        p1Btn.eventMode = "static";
+        p1Btn.cursor = "pointer";
+        p1Btn.on("pointertap", () => this.injectRep(1));
+        this.p1Meter.addChild(p1Btn);
 
         this.meterLayer.addChild(this.p1Meter);
 
-        // Player 2 Gauge Container
+        // Center VS & Timer Column
+        this.centerCol = new Container();
+        this.centerCol.x = sw / 2;
+        this.centerCol.y = meterBoxY + 30;
+
+        this.timerText = new Text({
+            text: "20.0s",
+            style: { fontFamily: this.fontFamily, fontSize: 18, fill: "#FBBF24" },
+        });
+        this.timerText.anchor.set(0.5, 0);
+        this.centerCol.addChild(this.timerText);
+
+        const vsText = new Text({
+            text: "VS",
+            style: { fontFamily: this.fontFamily, fontSize: 14, fill: "#EF4444" },
+        });
+        vsText.anchor.set(0.5, 0);
+        vsText.y = 38;
+        this.centerCol.addChild(vsText);
+
+        this.meterLayer.addChild(this.centerCol);
+
+        // Player 2 Gauge Container (Right)
         this.p2Meter = new Container();
-        this.p2Meter.x = meterBoxX + meterBoxW - 300;
-        this.p2Meter.y = meterBoxY + 30;
+        this.p2Meter.x = meterBoxX + meterBoxW - 310;
+        this.p2Meter.y = meterBoxY + 24;
 
         const p2Title = new Text({
             text: "PLAYER 2: GUNNER",
@@ -173,8 +473,16 @@ export class Level4PowerMeter {
         });
         this.p2Meter.addChild(p2Title);
 
+        this.p2RepBig = new Text({
+            text: "0 REPS",
+            style: { fontFamily: this.fontFamily, fontSize: 24, fill: "#FBBF24" },
+        });
+        this.p2RepBig.x = 0;
+        this.p2RepBig.y = 24;
+        this.p2Meter.addChild(this.p2RepBig);
+
         this.p2BarBg = new Graphics();
-        this.p2BarBg.roundRect(0, 26, 260, 36, 4);
+        this.p2BarBg.roundRect(0, 64, 280, 24, 4);
         this.p2BarBg.fill({ color: 0x1f2937 });
         this.p2BarBg.stroke({ color: 0x374151, width: 2 });
         this.p2Meter.addChild(this.p2BarBg);
@@ -182,82 +490,66 @@ export class Level4PowerMeter {
         this.p2BarFill = new Graphics();
         this.p2Meter.addChild(this.p2BarFill);
 
-        this.p2ScoreText = new Text({
-            text: "CHARGING...",
-            style: { fontFamily: this.fontFamily, fontSize: 11, fill: "#FFF" },
+        this.p2StateTag = new Text({
+            text: "STATE: EXTENDED (180°)",
+            style: { fontFamily: this.fontFamily, fontSize: 7.5, fill: "#9CA3AF" },
         });
-        this.p2ScoreText.x = 10;
-        this.p2ScoreText.y = 38;
-        this.p2Meter.addChild(this.p2ScoreText);
+        this.p2StateTag.x = 0;
+        this.p2StateTag.y = 96;
+        this.p2Meter.addChild(this.p2StateTag);
 
-        this.p2UnitsText = new Text({
-            text: "-- ALIEN UNITS",
-            style: { fontFamily: this.fontFamily, fontSize: 9, fill: "#FBBF24" },
-        });
-        this.p2UnitsText.x = 0;
-        this.p2UnitsText.y = 74;
-        this.p2Meter.addChild(this.p2UnitsText);
+        // Manual P2 Curl Button
+        const p2Btn = new Container();
+        const p2BtnBg = new Graphics();
+        p2BtnBg.roundRect(0, 0, 130, 24, 3);
+        p2BtnBg.fill({ color: 0x78350f });
+        p2BtnBg.stroke({ color: 0xf59e0b, width: 1.5 });
+        p2Btn.addChild(p2BtnBg);
+        const p2BtnTxt = new Text({ text: "[ +1 P2 CURL ]", style: { fontFamily: this.fontFamily, fontSize: 7, fill: "#FFF" } });
+        p2BtnTxt.anchor.set(0.5);
+        p2BtnTxt.x = 65; p2BtnTxt.y = 12;
+        p2Btn.addChild(p2BtnTxt);
+        p2Btn.x = 0; p2Btn.y = 120;
+        p2Btn.eventMode = "static";
+        p2Btn.cursor = "pointer";
+        p2Btn.on("pointertap", () => this.injectRep(2));
+        this.p2Meter.addChild(p2Btn);
 
         this.meterLayer.addChild(this.p2Meter);
 
-        // Center Cosmic Capacitor
-        this.capacitorGlow = new Graphics();
-        this.capacitorGlow.circle(meterBoxX + meterBoxW / 2, meterBoxY + 110, 32);
-        this.capacitorGlow.fill({ color: 0x38bdf8, alpha: 0.3 });
-        this.meterLayer.addChild(this.capacitorGlow);
+        // Start / Action Trigger Button (Bottom Center)
+        this.actionBtn = new Container();
+        const aBg = new Graphics();
+        aBg.roundRect(0, 0, 320, 38, 4);
+        aBg.fill({ color: 0x1e293b });
+        aBg.stroke({ color: 0xf59e0b, width: 2 });
+        this.actionBtn.addChild(aBg);
 
-        this.capacitorCore = new Graphics();
-        this.capacitorCore.circle(meterBoxX + meterBoxW / 2, meterBoxY + 110, 18);
-        this.capacitorCore.fill({ color: 0x38bdf8 });
-        this.meterLayer.addChild(this.capacitorCore);
-
-        // Overall Power Indicator
-        this.overallText = new Text({
-            text: "CAPACITOR CHARGE: 0%",
-            style: {
-                fontFamily: this.fontFamily,
-                fontSize: 10,
-                fill: "#38BDF8",
-            },
+        this.actionBtnText = new Text({
+            text: "[ START BICEP SHOWDOWN ]",
+            style: { fontFamily: this.fontFamily, fontSize: 9, fill: "#F59E0B" },
         });
-        this.overallText.anchor.set(0.5);
-        this.overallText.x = meterBoxX + meterBoxW / 2;
-        this.overallText.y = meterBoxY + meterBoxH - 36;
-        this.meterLayer.addChild(this.overallText);
+        this.actionBtnText.anchor.set(0.5);
+        this.actionBtnText.x = 160;
+        this.actionBtnText.y = 19;
+        this.actionBtn.addChild(this.actionBtnText);
 
-        // Manual Trigger button for demo guarantee
-        this.chargeBtn = new Container();
-        const btnBg = new Graphics();
-        btnBg.roundRect(0, 0, 260, 36, 4);
-        btnBg.fill({ color: 0x1e293b });
-        btnBg.stroke({ color: 0xf59e0b, width: 2 });
-        this.chargeBtn.addChild(btnBg);
-
-        const btnText = new Text({
-            text: "[ HOLD TO BOOST POWER ]",
-            style: { fontFamily: this.fontFamily, fontSize: 8, fill: "#F59E0B" },
+        this.actionBtn.x = (sw - 320) / 2;
+        this.actionBtn.y = meterBoxY + meterBoxH + 16;
+        this.actionBtn.eventMode = "static";
+        this.actionBtn.cursor = "pointer";
+        this.actionBtn.on("pointertap", () => {
+            if (this.state === "INTRO") {
+                this.startCountdown();
+            } else if (this.state === "REVEAL") {
+                this.advanceToNextLevel();
+            }
         });
-        btnText.anchor.set(0.5);
-        btnText.x = 130;
-        btnText.y = 18;
-        this.chargeBtn.addChild(btnText);
 
-        this.chargeBtn.x = (sw - 260) / 2;
-        this.chargeBtn.y = meterBoxY + meterBoxH + 12;
-        this.chargeBtn.eventMode = "static";
-        this.chargeBtn.cursor = "pointer";
-
-        let buttonHeld = false;
-        this.chargeBtn.on("pointerdown", () => { buttonHeld = true; });
-        this.chargeBtn.on("pointerup", () => { buttonHeld = false; });
-        this.chargeBtn.on("pointerupoutside", () => { buttonHeld = false; });
-        this._isButtonHeld = () => buttonHeld;
-
-        this.uiLayer.addChild(this.chargeBtn);
+        this.uiLayer.addChild(this.actionBtn);
     }
 
     initAlienBox() {
-        // Alien Animated face in corner
         this.alienCard = new Container();
         const cardW = 120;
         const cardH = 95;
@@ -280,8 +572,8 @@ export class Level4PowerMeter {
         }
 
         const tag = new Text({
-            text: "EVALUATOR",
-            style: { fontFamily: this.fontFamily, fontSize: 7, fill: "#F59E0B" },
+            text: "FITNESS AUDITOR",
+            style: { fontFamily: this.fontFamily, fontSize: 6.5, fill: "#F59E0B" },
         });
         tag.anchor.set(0.5, 0);
         tag.x = cardW / 2;
@@ -289,7 +581,7 @@ export class Level4PowerMeter {
         this.alienCard.addChild(tag);
 
         this.alienCard.x = this.app.screen.width - 136;
-        this.alienCard.y = 70;
+        this.alienCard.y = 66;
         this.uiLayer.addChild(this.alienCard);
 
         this.unsubscribeMouth = commentary.onMouthFlap((talking) => {
@@ -350,55 +642,90 @@ export class Level4PowerMeter {
         }
     }
 
+    startCountdown() {
+        this.state = "COUNTDOWN";
+        this.stateTimer = 0;
+        this.countdownValue = 3;
+        this.actionBtn.visible = false;
+
+        if (this.soundManager) this.soundManager.playCountdown();
+        this.subText.text = `GET READY TO CURL: ${this.countdownValue}...`;
+        this.subText.style.fill = "#F59E0B";
+
+        const countInterval = setInterval(() => {
+            this.countdownValue--;
+            if (this.countdownValue > 0) {
+                this.subText.text = `GET READY TO CURL: ${this.countdownValue}...`;
+                if (this.soundManager) this.soundManager.playCountdown();
+            } else if (this.countdownValue === 0) {
+                this.subText.text = "CURL! P1 vs P2 — MAXIMUM REPS!";
+                this.subText.style.fill = "#22C55E";
+                if (this.soundManager) this.soundManager.playLevelComplete();
+            } else {
+                clearInterval(countInterval);
+                this.startShowdown();
+            }
+        }, 1000);
+    }
+
+    startShowdown() {
+        this.state = "SHOWDOWN";
+        this.stateTimer = 0;
+        this.showdownRemaining = this.showdownDuration;
+        this.p1Tracker.reset();
+        this.p2Tracker.reset();
+        this.subText.text = "SHOWDOWN ACTIVE: FULL BICEP EXTENSION & CONTRACTION!";
+        this.subText.style.fill = "#38BDF8";
+    }
+
     update(deltaTime) {
         const dtSec = deltaTime / 60;
         this.stateTimer += dtSec;
 
-        // Animate capacitor core
-        const pulse = Math.sin(Date.now() * 0.008);
-        this.capacitorGlow.scale.set(1.0 + pulse * 0.15);
+        // Spacebar / keyboard shortcuts to inject reps
+        if (this.input) {
+            if (this.input.wasPressed("1")) this.injectRep(1);
+            if (this.input.wasPressed("2")) this.injectRep(2);
+            if (this.input.wasPressed(" ") && this.state === "INTRO") this.startCountdown();
+            else if (this.input.wasPressed(" ") && this.state === "REVEAL") this.advanceToNextLevel();
+        }
 
-        // Check for charge inputs: spacebar, button hold, or CV movement
-        const isCharging = (
-            (this.input && (this.input.isDown(" ") || this.input.isDown("Space"))) ||
-            (this._isButtonHeld && this._isButtonHeld()) ||
-            this.stateTimer > 4.0 // Auto-progresses so the level never hangs
-        );
+        // Auto-progress from Intro after 4.5s
+        if (this.state === "INTRO" && this.stateTimer >= 4.5) {
+            this.startCountdown();
+        }
 
-        if (this.state === "INTRO") {
-            if (this.stateTimer >= 3.5 || isCharging) {
-                this.state = "CHARGING";
-                this.stateTimer = 0;
-            }
-        } else if (this.state === "CHARGING") {
-            // Fill capacitor
-            this.chargeProgress = Math.min(1.0, this.chargeProgress + dtSec * 0.35);
+        // Update Gauge Displays
+        this.p1RepBig.text = `${this.p1Tracker.reps} REPS`;
+        this.p2RepBig.text = `${this.p2Tracker.reps} REPS`;
 
-            this.overallText.text = `CAPACITOR CHARGE: ${Math.round(this.chargeProgress * 100)}%`;
+        this.p1StateTag.text = `STATE: ${this.p1Tracker.state} (${Math.round(this.p1Tracker.smoothedAngle)}°) [${this.p1Tracker.armUsed} ARM]`;
+        this.p2StateTag.text = `STATE: ${this.p2Tracker.state} (${Math.round(this.p2Tracker.smoothedAngle)}°) [${this.p2Tracker.armUsed} ARM]`;
 
-            // Draw player 1 fill
-            this.p1BarFill.clear();
-            this.p1BarFill.roundRect(0, 26, 260 * this.chargeProgress, 36, 4);
-            this.p1BarFill.fill({ color: 0x22c55e });
+        // Draw progress fill based on curl angle (180° = 0%, 70° = 100%)
+        const p1CurlRatio = Math.max(0, Math.min(1, (180 - this.p1Tracker.smoothedAngle) / 110));
+        const p2CurlRatio = Math.max(0, Math.min(1, (180 - this.p2Tracker.smoothedAngle) / 110));
 
-            // Draw player 2 fill
-            this.p2BarFill.clear();
-            this.p2BarFill.roundRect(0, 26, 260 * this.chargeProgress, 36, 4);
-            this.p2BarFill.fill({ color: 0xfbbf24 });
+        this.p1BarFill.clear();
+        this.p1BarFill.roundRect(0, 64, 280 * p1CurlRatio, 24, 4);
+        this.p1BarFill.fill({ color: 0x22c55e });
 
-            this.p1Score = Math.round(this.targetP1Score * this.chargeProgress);
-            this.p2Score = Math.round(this.targetP2Score * this.chargeProgress);
-            this.p1ScoreText.text = `${this.p1Score}%`;
-            this.p2ScoreText.text = `${this.p2Score}%`;
+        this.p2BarFill.clear();
+        this.p2BarFill.roundRect(0, 64, 280 * p2CurlRatio, 24, 4);
+        this.p2BarFill.fill({ color: 0xfbbf24 });
 
-            if (this.chargeProgress >= 1.0) {
-                this.state = "REVEAL_P1";
-                this.stateTimer = 0;
+        // Showdown Timer
+        if (this.state === "SHOWDOWN") {
+            this.showdownRemaining = Math.max(0, this.showdownDuration - this.stateTimer);
+            this.timerText.text = `${this.showdownRemaining.toFixed(1)}s`;
+
+            if (this.showdownRemaining <= 0) {
+                this.state = "REVEAL";
                 this.revealResults();
             }
         }
 
-        // Dialogue fading
+        // Dialogue timer
         if (this.dialogueTimer > 0) {
             this.dialogueTimer -= dtSec;
             if (this.dialogueTimer <= 0.4) {
@@ -411,94 +738,86 @@ export class Level4PowerMeter {
     }
 
     revealResults() {
-        if (this.soundManager) {
-            this.soundManager.playLevelComplete();
+        this.actionBtn.visible = true;
+        this.actionBtnText.text = "[ PROCEED TO LEVEL 5: ALIEN ESCAPE ]";
+
+        const p1 = this.p1Tracker.reps;
+        const p2 = this.p2Tracker.reps;
+
+        let verdict = "";
+        if (p1 > p2) {
+            verdict = `PLAYER 1 WINS WITH ${p1} REPS! (P2: ${p2} REPS)`;
+            this.subText.style.fill = "#22C55E";
+        } else if (p2 > p1) {
+            verdict = `PLAYER 2 WINS WITH ${p2} REPS! (P1: ${p1} REPS)`;
+            this.subText.style.fill = "#FBBF24";
+        } else {
+            verdict = `PERFECT TIE! BOTH PLAYERS LOGGED ${p1} REPS!`;
+            this.subText.style.fill = "#38BDF8";
         }
 
-        this.p1UnitsText.text = `${this.targetP1Score} ALIEN UNITS [VALIDATED]`;
-        this.p2UnitsText.text = `${this.targetP2Score} ALIEN UNITS [VALIDATED]`;
+        this.subText.text = `${verdict} // [ CLICK OR SPACE TO ADVANCE ]`;
+        commentary.setStat("p1PowerScore", p1 * 10);
+        commentary.setStat("p2PowerScore", p2 * 10);
 
-        commentary.setStat("p1PowerScore", this.targetP1Score);
-        commentary.setStat("p2PowerScore", this.targetP2Score);
+        if (this.soundManager) this.soundManager.playLevelComplete();
 
-        this.subText.text = "POWER TEST COMPLETE // [ CLICK OR SPACE TO ADVANCE ]";
-        this.subText.style.fill = "#10B981";
-
-        // Sarcastic Piper alien commentary
+        // Piper Sarcastic Commentary
         commentary.say(
-            `Measurement complete. Player One registers ${this.targetP1Score} alien units. Barely enough to power an oven. Player Two registers ${this.targetP2Score} alien units. Legally suspicious fortitude.`,
+            `Bicep evaluation compiled. Player One achieved ${p1} legitimate curls. Player Two achieved ${p2} curls. Central Vienium certifies your muscle fibers as moderately capable. Proceeding to Alien Escape.`,
             { force: true }
         );
 
-        let advanced = false;
-        const advance = () => {
-            if (advanced) return;
-            advanced = true;
-            if (this._advanceTimeout) {
-                clearTimeout(this._advanceTimeout);
-                this._advanceTimeout = null;
-            }
-            if (this._advanceKeyCleanup) {
-                this._advanceKeyCleanup();
-                this._advanceKeyCleanup = null;
-            }
-            this.onComplete();
-        };
-
-        const onKey = (e) => {
-            if (e.type === "keydown" && e.code !== "Space" && e.code !== "Enter") return;
-            advance();
-        };
-
-        window.addEventListener("keydown", onKey);
-        window.addEventListener("pointerup", onKey);
-        this._advanceKeyCleanup = () => {
-            window.removeEventListener("keydown", onKey);
-            window.removeEventListener("pointerup", onKey);
-        };
-
-        this._advanceTimeout = setTimeout(advance, 5500);
+        // Auto advance after 6s
+        this._advanceTimeout = setTimeout(() => {
+            this.advanceToNextLevel();
+        }, 6500);
     }
 
-    // ─── Webcam PiP Overlay ───────────────────────────────────────────────────
+    advanceToNextLevel() {
+        if (this._advanceTimeout) {
+            clearTimeout(this._advanceTimeout);
+            this._advanceTimeout = null;
+        }
+        this.onComplete();
+    }
+
+    // ─── Webcam PiP Overlay with Real-time Pose Skeleton ──────────────────────
 
     initWebcamPiP() {
         if (document.getElementById("level4-pip-overlay")) return;
 
-        // Outer wrapper (DOM, positioned over canvas)
         this._pipEl = document.createElement("div");
         this._pipEl.id = "level4-pip-overlay";
         Object.assign(this._pipEl.style, {
             position: "fixed",
-            bottom: "24px",
-            left: "24px",
-            width: "220px",
+            bottom: "20px",
+            left: "20px",
+            width: "280px",
             zIndex: "30",
             fontFamily: "'Press Start 2P', monospace",
             pointerEvents: "none",
         });
 
-        // Header bar
         const header = document.createElement("div");
         Object.assign(header.style, {
             background: "#070a10",
             border: "2px solid #38bdf8",
             borderBottom: "none",
             color: "#38bdf8",
-            fontSize: "7px",
+            fontSize: "7.5px",
             letterSpacing: "1px",
             padding: "5px 10px",
             display: "flex",
             justifyContent: "space-between",
             alignItems: "center",
         });
-        header.innerHTML = '<span>BIOMETRIC POSE SCAN</span><span id="level4-pip-status" style="color:#22c55e">● LIVE</span>';
+        header.innerHTML = '<span>POSE TRACKER // SKELETON</span><span style="color:#22c55e">● LIVE</span>';
         this._pipEl.appendChild(header);
 
-        // Canvas
         this._pipCanvas = document.createElement("canvas");
-        this._pipCanvas.width = 220;
-        this._pipCanvas.height = 165;
+        this._pipCanvas.width = 280;
+        this._pipCanvas.height = 190;
         Object.assign(this._pipCanvas.style, {
             display: "block",
             border: "2px solid #38bdf8",
@@ -508,107 +827,126 @@ export class Level4PowerMeter {
         this._pipEl.appendChild(this._pipCanvas);
         this._pipCtx = this._pipCanvas.getContext("2d");
 
-        // Footer label
         this._pipStatusBar = document.createElement("div");
         Object.assign(this._pipStatusBar.style, {
             background: "#070a10",
             border: "2px solid #38bdf8",
             borderTop: "1px solid #1e3a5f",
             color: "#9ca3af",
-            fontSize: "6px",
-            padding: "4px 10px",
+            fontSize: "6.5px",
+            padding: "4px 8px",
             letterSpacing: "1px",
         });
-        this._pipStatusBar.textContent = "STRIKE A POWER POSE";
+        this._pipStatusBar.textContent = "STAND BACK & CURL ARMS";
         this._pipEl.appendChild(this._pipStatusBar);
 
         document.body.appendChild(this._pipEl);
 
-        // Start render loop
-        let scanY = 0;
-        const video = this.faceTracker ? this.faceTracker.getVideoElement() : null;
-
+        // Draw PiP Loop
         const drawPiP = () => {
             this._pipRaf = requestAnimationFrame(drawPiP);
             const ctx = this._pipCtx;
+            if (!ctx) return;
             const w = this._pipCanvas.width;
             const h = this._pipCanvas.height;
 
             ctx.fillStyle = "#070a10";
             ctx.fillRect(0, 0, w, h);
 
-            if (video && video.readyState >= 2) {
-                // Mirror the video (flip horizontally)
+            if (this.video && this.video.readyState >= 2) {
+                // Mirror Video
                 ctx.save();
                 ctx.translate(w, 0);
                 ctx.scale(-1, 1);
-                ctx.drawImage(video, 0, 0, w, h);
+                ctx.drawImage(this.video, 0, 0, w, h);
                 ctx.restore();
 
-                // CRT scanline overlay
-                ctx.fillStyle = "rgba(0,0,0,0.18)";
+                // Draw Pose Skeleton & Angle Overlays
+                this.drawSkeletonOverlay(ctx, this.p1Tracker.landmarks, w, h, "#22c55e", "P1");
+                this.drawSkeletonOverlay(ctx, this.p2Tracker.landmarks, w, h, "#fbbf24", "P2");
+
+                // CRT Scanlines
+                ctx.fillStyle = "rgba(0,0,0,0.16)";
                 for (let y = 0; y < h; y += 3) {
                     ctx.fillRect(0, y, w, 1);
                 }
 
-                // Animated scan pulse
-                scanY = (scanY + 1.5) % h;
-                const scanGrad = ctx.createLinearGradient(0, scanY - 8, 0, scanY + 8);
-                scanGrad.addColorStop(0, "rgba(56,189,248,0)");
-                scanGrad.addColorStop(0.5, "rgba(56,189,248,0.22)");
-                scanGrad.addColorStop(1, "rgba(56,189,248,0)");
-                ctx.fillStyle = scanGrad;
-                ctx.fillRect(0, scanY - 8, w, 16);
-
-                // Retro targeting border
-                ctx.strokeStyle = this.chargeProgress > 0.5 ? "#22c55e" : "#38bdf8";
-                ctx.lineWidth = 2;
-                ctx.strokeRect(4, 4, w - 8, h - 8);
-
-                // Corner tick marks
-                const tick = 12;
-                ctx.lineWidth = 3;
-                [[4, 4], [w - 4, 4], [4, h - 4], [w - 4, h - 4]].forEach(([cx, cy]) => {
-                    const sx = cx === 4 ? 1 : -1;
-                    const sy = cy === 4 ? 1 : -1;
-                    ctx.beginPath();
-                    ctx.moveTo(cx, cy + sy * tick);
-                    ctx.lineTo(cx, cy);
-                    ctx.lineTo(cx + sx * tick, cy);
-                    ctx.stroke();
-                });
-
-                // Charge level indicator bar at bottom of feed
-                const barW = Math.round((w - 8) * this.chargeProgress);
-                ctx.fillStyle = this.chargeProgress > 0.8 ? "#22c55e" : this.chargeProgress > 0.4 ? "#f59e0b" : "#38bdf8";
-                ctx.fillRect(4, h - 12, barW, 8);
-
-                // Status label
-                const pct = Math.round(this.chargeProgress * 100);
-                this._pipStatusBar.textContent = pct >= 100 ? "★ POWER MAXED — EVALUATION COMPLETE" :
-                    pct > 50 ? `CHARGING — ${pct}% ALIEN UNITS DETECTED` :
-                    "RAISE ARMS / STRIKE A POWER POSE";
-                this._pipStatusBar.style.color = pct >= 100 ? "#22c55e" : pct > 50 ? "#f59e0b" : "#9ca3af";
-
-            } else {
-                // No video: draw static
-                const imgData = ctx.createImageData(w, h);
-                const buf = new Uint32Array(imgData.data.buffer);
-                for (let i = 0; i < buf.length; i++) {
-                    buf[i] = Math.random() < 0.06 ? 0xff38bdf8 : 0xff05070a;
+                // Status message
+                if (this.state === "SHOWDOWN") {
+                    this._pipStatusBar.textContent = `P1: ${this.p1Tracker.reps} REPS  |  P2: ${this.p2Tracker.reps} REPS`;
+                    this._pipStatusBar.style.color = "#34d399";
+                } else if (this.state === "REVEAL") {
+                    this._pipStatusBar.textContent = `COMPLETE // P1: ${this.p1Tracker.reps} vs P2: ${this.p2Tracker.reps}`;
+                    this._pipStatusBar.style.color = "#f59e0b";
+                } else {
+                    this._pipStatusBar.textContent = "READY // STAND IN WEBCAM VIEW";
+                    this._pipStatusBar.style.color = "#9ca3af";
                 }
-                ctx.putImageData(imgData, 0, 0);
+            } else {
                 ctx.fillStyle = "#ef4444";
                 ctx.font = "8px 'Press Start 2P', monospace";
                 ctx.textAlign = "center";
-                ctx.fillText("NO SIGNAL", w / 2, h / 2);
-
-                this._pipStatusBar.textContent = "CAMERA OFFLINE — USE SPACEBAR";
-                this._pipStatusBar.style.color = "#ef4444";
+                ctx.fillText("NO WEBCAM SIGNAL", w / 2, h / 2);
             }
         };
 
         drawPiP();
+    }
+
+    drawSkeletonOverlay(ctx, landmarks, w, h, color, label) {
+        if (!landmarks || landmarks.length === 0) return;
+
+        // Joints to connect: Left arm (11->13->15) and Right arm (12->14->16)
+        const toCanvas = (pt) => ({
+            x: (1 - pt.x) * w, // Mirrored X
+            y: pt.y * h,
+        });
+
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = color;
+        ctx.fillStyle = color;
+
+        // Draw Right Arm
+        const rs = landmarks[R_SHOULDER] ? toCanvas(landmarks[R_SHOULDER]) : null;
+        const re = landmarks[R_ELBOW] ? toCanvas(landmarks[R_ELBOW]) : null;
+        const rw = landmarks[R_WRIST] ? toCanvas(landmarks[R_WRIST]) : null;
+
+        if (rs && re && rw) {
+            ctx.beginPath();
+            ctx.moveTo(rs.x, rs.y);
+            ctx.lineTo(re.x, re.y);
+            ctx.lineTo(rw.x, rw.y);
+            ctx.stroke();
+
+            [rs, re, rw].forEach((pt) => {
+                ctx.beginPath();
+                ctx.circle ? ctx.arc(pt.x, pt.y, 4, 0, Math.PI * 2) : ctx.arc(pt.x, pt.y, 4, 0, Math.PI * 2);
+                ctx.fill();
+            });
+
+            // Draw player label over shoulder
+            ctx.font = "7px 'Press Start 2P', monospace";
+            ctx.fillText(label, rs.x - 8, rs.y - 10);
+        }
+
+        // Draw Left Arm
+        const ls = landmarks[L_SHOULDER] ? toCanvas(landmarks[L_SHOULDER]) : null;
+        const le = landmarks[L_ELBOW] ? toCanvas(landmarks[L_ELBOW]) : null;
+        const lw = landmarks[L_WRIST] ? toCanvas(landmarks[L_WRIST]) : null;
+
+        if (ls && le && lw) {
+            ctx.beginPath();
+            ctx.moveTo(ls.x, ls.y);
+            ctx.lineTo(le.x, le.y);
+            ctx.lineTo(lw.x, lw.y);
+            ctx.stroke();
+
+            [ls, le, lw].forEach((pt) => {
+                ctx.beginPath();
+                ctx.arc(pt.x, pt.y, 4, 0, Math.PI * 2);
+                ctx.fill();
+            });
+        }
     }
 
     destroyWebcamPiP() {
@@ -624,9 +962,18 @@ export class Level4PowerMeter {
     }
 
     destroy() {
-        if (this._advanceKeyCleanup) {
-            this._advanceKeyCleanup();
-            this._advanceKeyCleanup = null;
+        this.poseRunning = false;
+        if (this.poseRaf) {
+            cancelAnimationFrame(this.poseRaf);
+            this.poseRaf = null;
+        }
+        if (this.poseLandmarker) {
+            try { this.poseLandmarker.close(); } catch (e) {}
+            this.poseLandmarker = null;
+        }
+        if (this._createdStream) {
+            this._createdStream.getTracks().forEach((t) => t.stop());
+            this._createdStream = null;
         }
         if (this._advanceTimeout) {
             clearTimeout(this._advanceTimeout);

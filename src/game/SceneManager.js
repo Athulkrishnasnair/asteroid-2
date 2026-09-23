@@ -1,14 +1,16 @@
 // src/game/SceneManager.js
 // Master scene state machine:
 // INTRO -> LEVEL1 -> TRANSITION_1_2 -> LEVEL2 -> TRANSITION_2_3 -> LEVEL3
-// -> TRANSITION_3_4 -> LEVEL4 -> TRANSITION_4_FINAL -> FINAL_SCREEN
+// -> TRANSITION_3_4 -> LEVEL4 -> TRANSITION_4_5 -> LEVEL5 -> TRANSITION_5_FINAL -> FINAL_SCREEN
 
 import { Container, Graphics, Text, Sprite } from "pixi.js";
 import { Level2Maze } from "./Level2Maze.js";
 import { Level3Subway } from "./Level3Subway.js";
 import { Level4PowerMeter } from "./Level4PowerMeter.js";
+import { Level5Platformer } from "./Level5Platformer.js";
 import { FinalScreen } from "./FinalScreen.js";
 import { TrackingHUD } from "./TrackingHUD.js";
+import { DevMenu } from "./DevMenu.js";
 import { voice } from "../services/voice.js";
 import { commentary } from "../services/commentary.js";
 
@@ -23,11 +25,13 @@ export class SceneManager {
         this.level2 = null;
         this.level3 = null;
         this.level4 = null;
+        this.level5 = null;
         this.finalScreen = null;
 
         this.transitionContainer = new Container();
         this.fontFamily = "'Press Start 2P', monospace";
         this.initialized = false;
+        this.devMenu = null;
     }
 
     init() {
@@ -36,6 +40,9 @@ export class SceneManager {
 
         this.app.stage.addChild(this.transitionContainer);
         this.transitionContainer.visible = false;
+
+        // Global Developer Menu (CTRL + \)
+        this.devMenu = new DevMenu({ sceneManager: this });
 
         // Listen for Level 1 complete
         this.game.onLevelComplete = () => {
@@ -89,6 +96,7 @@ export class SceneManager {
             this._destroyLevel2();
             this._destroyLevel3();
             this._destroyLevel4();
+            this._destroyLevel5();
             this._destroyFinalScreen();
             this.game.show();
             this.game.restart();
@@ -119,7 +127,7 @@ export class SceneManager {
         } else if (newScene === "TRANSITION_3_4") {
             this._destroyLevel3();
             this.playTransitionCutscene(
-                "TRANSIT POLICE INTERCEPTION COMPLETE.\nTRANSPORTING DEFENDANTS TO PHYSICAL EVALUATION:\nTHE ALIEN POWER-O-METER.",
+                "TRANSIT POLICE INTERCEPTION COMPLETE.\nTRANSPORTING DEFENDANTS TO PHYSICAL EVALUATION:\nTHE BICEP SHOWDOWN.",
                 "LEVEL4",
                 3.0
             );
@@ -127,10 +135,21 @@ export class SceneManager {
         } else if (newScene === "LEVEL4") {
             this.mountLevel4();
 
-        } else if (newScene === "TRANSITION_4_FINAL") {
+        } else if (newScene === "TRANSITION_4_5") {
             this._destroyLevel4();
             this.playTransitionCutscene(
-                "PHYSICAL POWER CAPACITANCE COMPILED.\nOPENING SUPREME INQUIRY CHAMBER FOR FINAL VERDICT.",
+                "PHYSICAL POWER CAPACITANCE CERTIFIED.\nINTRUSION DETECTED IN SECTOR CV-07!\nINITIATING LEVEL 5: ALIEN ESCAPE!\nPLAYER 2: DO NOT SMILE!",
+                "LEVEL5",
+                3.5
+            );
+
+        } else if (newScene === "LEVEL5") {
+            this.mountLevel5();
+
+        } else if (newScene === "TRANSITION_5_FINAL") {
+            this._destroyLevel5();
+            this.playTransitionCutscene(
+                "ESCAPE POD LAUNCH CONFIRMED.\nOPENING SUPREME INQUIRY CHAMBER FOR FINAL VERDICT.",
                 "FINAL_SCREEN",
                 3.0
             );
@@ -158,6 +177,13 @@ export class SceneManager {
         if (this.level4) {
             this.level4.destroy();
             this.level4 = null;
+        }
+    }
+
+    _destroyLevel5() {
+        if (this.level5) {
+            this.level5.destroy();
+            this.level5 = null;
         }
     }
 
@@ -448,11 +474,28 @@ export class SceneManager {
             textures: this.game.textures,
             faceTracker: this.faceTracker,
             onComplete: () => {
-                this.changeScene("TRANSITION_4_FINAL");
+                this.changeScene("TRANSITION_4_5");
             },
         });
 
         this.app.stage.addChild(this.level4.container);
+    }
+
+    mountLevel5() {
+        this._destroyLevel5();
+
+        this.level5 = new Level5Platformer({
+            app: this.app,
+            input: this.game.input,
+            soundManager: this.game.soundManager,
+            textures: this.game.textures,
+            faceTracker: this.faceTracker,
+            onComplete: () => {
+                this.changeScene("TRANSITION_5_FINAL");
+            },
+        });
+
+        this.app.stage.addChild(this.level5.container);
     }
 
     mountFinalScreen() {
@@ -482,6 +525,9 @@ export class SceneManager {
             }
             if (this.currentScene === "LEVEL4" && this.level4) {
                 this.level4.update(deltaTime);
+            }
+            if (this.currentScene === "LEVEL5" && this.level5) {
+                this.level5.update(deltaTime);
             }
             if (this.currentScene === "FINAL_SCREEN" && this.finalScreen) {
                 this.finalScreen.update(deltaTime);

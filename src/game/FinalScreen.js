@@ -694,16 +694,17 @@ export class FinalScreen {
             roastText += "• Subway sprint was moderately agile before mandatory transit police interception.\n";
         }
 
-        roastText += `• Power Test: P1 produced ${stats.p1PowerScore} AU, P2 produced ${stats.p2PowerScore} AU.\n`;
+        roastText += `• Bicep Showdown: P1 logged ${Math.round(stats.p1PowerScore / 10)} reps, P2 logged ${Math.round(stats.p2PowerScore / 10)} reps.\n`;
+        roastText += `• Alien Escape: P1 mouth agility validated; P2 humor suppression protocol executed.\n`;
         roastText += `• Status: Legally granted joint custody clearance. Triplicate paperwork filed.`;
 
         const roastBox = new Text({
             text: roastText,
             style: {
                 fontFamily: "'VT323', monospace",
-                fontSize: 18,
+                fontSize: 17,
                 fill: "#E2E8F0",
-                lineHeight: 22,
+                lineHeight: 21,
                 wordWrap: true,
                 wordWrapWidth: cardW - 180,
             },
