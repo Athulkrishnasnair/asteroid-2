@@ -37,8 +37,8 @@ export function extractCommands(normalizedText) {
     for (const token of tokens) {
         if (token === "left") matches.push("LEFT");
         else if (token === "right") matches.push("RIGHT");
-        else if (token === "up" || token === "jump" || token === "hop") matches.push("UP");
-        else if (token === "down" || token === "duck" || token === "slide") matches.push("DOWN");
+        else if (token === "up" || token === "jump" || token === "hop") matches.push("JUMP");
+        else if (token === "down" || token === "duck" || token === "slide") matches.push("DUCK");
     }
 
     return matches;

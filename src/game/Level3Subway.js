@@ -32,14 +32,15 @@ export class Level3Subway {
 
         this.fontFamily = "'Press Start 2P', monospace";
 
-        // Subway 3 Lanes Setup
+        // Subway 3 Lanes Setup: 0 = LEFT, 1 = MIDDLE, 2 = RIGHT
         this.laneSpacing = 110;
-        this.currentLane = 0; // -1 = Left, 0 = Center, 1 = Right
+        this.currentLane = 1; // 0 = Left, 1 = Middle, 2 = Right
+        this.lanePositions = [0, 0, 0];
         this.playerBaseY = 0;
 
         // Player physics & actions
         this.player = {
-            lane: 0,
+            lane: 1,
             x: 0,
             y: 0,
             targetX: 0,
@@ -121,7 +122,14 @@ export class Level3Subway {
         this.playerBaseY = sh * 0.72;
         this.laneSpacing = Math.min(130, Math.max(80, sw * 0.16));
 
-        this.player.targetX = this.centerX + this.player.lane * this.laneSpacing;
+        // Authoritative 3-lane X positions: [0]=LEFT, [1]=MIDDLE, [2]=RIGHT
+        this.lanePositions = [
+            this.centerX - this.laneSpacing,
+            this.centerX,
+            this.centerX + this.laneSpacing,
+        ];
+
+        this.player.targetX = this.lanePositions[this.currentLane];
         this.player.x = this.player.targetX;
         this.player.y = this.playerBaseY;
 
@@ -599,18 +607,27 @@ export class Level3Subway {
 
     changeLane(direction) {
         // direction: -1 (left), 1 (right)
-        const nextLane = Math.max(-1, Math.min(1, this.player.lane + direction));
-        if (nextLane !== this.player.lane) {
-            this.player.lane = nextLane;
-            this.player.targetX = this.centerX + this.player.lane * this.laneSpacing;
+        // Clamps strictly to 0 (LEFT), 1 (MIDDLE), 2 (RIGHT)
+        const nextLane = Math.max(0, Math.min(2, this.currentLane + direction));
+        this.currentLane = nextLane;
+        this.player.lane = nextLane;
+        if (this.lanePositions && this.lanePositions.length === 3) {
+            this.player.targetX = this.lanePositions[this.currentLane];
+        } else {
+            this.player.targetX = this.centerX + (this.currentLane - 1) * this.laneSpacing;
         }
     }
 
     performJump() {
         if (this.player.isJumping) return;
+        // Cancel active duck state if jumping
+        this.player.isDucking = false;
+        this.player.duckTimer = 0;
+        if (this.player.sprite) this.player.sprite.scale.set(1.0, 1.0);
+
         this.player.isJumping = true;
         // Louder voice command produces higher jump boost
-        const boost = Math.min(6, this.currentVolume * 8);
+        const boost = Math.min(6, (this.currentVolume || 0) * 8);
         this.player.jumpVel = -(this.player.jumpStrength + boost);
 
         if (this.soundManager) {
@@ -632,11 +649,11 @@ export class Level3Subway {
         const types = ["LOW", "HIGH", "WALL_LEFT", "WALL_RIGHT", "WALL_CENTER"];
         const chosenType = types[Math.floor(Math.random() * types.length)];
 
-        let lane = 0;
-        if (chosenType === "WALL_LEFT") lane = -1;
-        else if (chosenType === "WALL_RIGHT") lane = 1;
-        else if (chosenType === "WALL_CENTER") lane = 0;
-        else lane = Math.floor(Math.random() * 3) - 1; // -1, 0, or 1
+        let lane = 1;
+        if (chosenType === "WALL_LEFT") lane = 0;
+        else if (chosenType === "WALL_RIGHT") lane = 2;
+        else if (chosenType === "WALL_CENTER") lane = 1;
+        else lane = Math.floor(Math.random() * 3); // 0, 1, or 2
 
         const obs = {
             type: chosenType,
@@ -794,11 +811,11 @@ export class Level3Subway {
         if (this.input.wasPressed("d") || this.input.wasPressed("D") || this.input.wasPressed("ArrowRight")) {
             this.handleActionCommand("RIGHT", "keyboard");
         }
-        if (this.input.wasPressed("w") || this.input.wasPressed("W") || this.input.wasPressed("ArrowUp")) {
-            this.handleActionCommand("UP", "keyboard");
+        if (this.input.wasPressed("w") || this.input.wasPressed("W") || this.input.wasPressed("ArrowUp") || this.input.wasPressed(" ")) {
+            this.handleActionCommand("JUMP", "keyboard");
         }
         if (this.input.wasPressed("s") || this.input.wasPressed("S") || this.input.wasPressed("ArrowDown")) {
-            this.handleActionCommand("DOWN", "keyboard");
+            this.handleActionCommand("DUCK", "keyboard");
         }
     }
 
@@ -809,14 +826,16 @@ export class Level3Subway {
             const obs = this.obstacles[i];
             obs.y += moveStep;
 
-            const obsX = this.centerX + obs.lane * this.laneSpacing;
+            const obsX = (this.lanePositions && this.lanePositions[obs.lane] !== undefined)
+                ? this.lanePositions[obs.lane]
+                : (this.centerX + (obs.lane - 1) * this.laneSpacing);
             obs.sprite.x = obsX;
             obs.sprite.y = obs.y;
 
             // Collision check with player
             const dy = Math.abs(obs.y - this.playerBaseY);
             if (dy < 24 && !obs.passed) {
-                if (obs.lane === this.player.lane) {
+                if (obs.lane === this.currentLane) {
                     let hit = false;
                     if (obs.type === "LOW" && (!this.player.isJumping || this.player.jumpY > -20)) {
                         hit = true;
@@ -895,16 +914,18 @@ export class Level3Subway {
         this.gameOver = false;
         if (this.gameOverBox) this.gameOverBox.visible = false;
 
-        this.player.lane = 0;
-        this.player.x = this.centerX;
+        this.currentLane = 1;
+        this.player.lane = 1;
+        this.player.targetX = this.lanePositions ? this.lanePositions[1] : this.centerX;
+        this.player.x = this.player.targetX;
         this.player.y = this.playerBaseY;
-        this.player.targetX = this.centerX;
         this.player.isJumping = false;
         this.player.isDucking = false;
         this.player.jumpY = 0;
         this.player.invulnerableTimer = 0;
         this.player.score = 0;
         this.player.sprite.alpha = 1.0;
+        if (this.player.sprite) this.player.sprite.scale.set(1.0, 1.0);
 
         // Clear existing obstacles
         for (const obs of this.obstacles) {

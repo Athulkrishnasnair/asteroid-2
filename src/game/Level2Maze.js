@@ -31,11 +31,13 @@ export class Level2Maze {
 
         this.container = new Container();
         this.mazeLayer = new Container();
+        this.hazardLayer = new Container();
         this.exitLayer = new Container();
         this.playerLayer = new Container();
         this.uiLayer = new Container();
 
         this.container.addChild(this.mazeLayer);
+        this.container.addChild(this.hazardLayer);
         this.container.addChild(this.exitLayer);
         this.container.addChild(this.playerLayer);
         this.container.addChild(this.uiLayer);
@@ -52,11 +54,64 @@ export class Level2Maze {
             y: 0,
             radius: 14, // Forgiving collision radius so ship never gets snagged on corners
             speed: 5.2, // Brisk, responsive speed
+            invulnerableTimer: 0,
             sprite: new Container(),
             aura: null,
             disagreeIcon: null,
             animTimer: 0,
         };
+
+        // 5-heart system
+        this.lives = 5;
+        this.maxLives = 5;
+        this.gameOver = false;
+
+        // Laser Hazards across corridor paths
+        this.lasers = [
+            {
+                id: "laser1",
+                tileX1: 5.0,
+                tileY1: 5.05,
+                tileX2: 5.0,
+                tileY2: 5.95,
+                activeDuration: 2.2,
+                warningDuration: 0.8,
+                inactiveDuration: 1.8,
+                timer: 0,
+                state: "ACTIVE",
+                gfx: new Graphics(),
+            },
+            {
+                id: "laser2",
+                tileX1: 3.0,
+                tileY1: 1.05,
+                tileX2: 3.0,
+                tileY2: 1.95,
+                activeDuration: 2.0,
+                warningDuration: 0.8,
+                inactiveDuration: 2.0,
+                timer: 1.5,
+                state: "INACTIVE",
+                gfx: new Graphics(),
+            },
+            {
+                id: "laser3",
+                tileX1: 6.05,
+                tileY1: 3.0,
+                tileX2: 6.95,
+                tileY2: 3.0,
+                activeDuration: 2.4,
+                warningDuration: 0.8,
+                inactiveDuration: 1.6,
+                timer: 0.8,
+                state: "ACTIVE",
+                gfx: new Graphics(),
+            },
+        ];
+
+        for (const laser of this.lasers) {
+            this.hazardLayer.addChild(laser.gfx);
+        }
 
         // Exit chamber zone
         this.exitArea = {
@@ -247,6 +302,73 @@ export class Level2Maze {
         this.headerText.y = 12;
         this.uiLayer.addChild(this.headerText);
 
+        // 5-Heart Life Display
+        this.livesText = new Text({
+            text: "LIVES: ❤️❤️❤️❤️❤️",
+            style: {
+                fontFamily: this.fontFamily,
+                fontSize: 9.5,
+                fill: "#EF4444",
+            },
+        });
+        this.livesText.x = 18;
+        this.livesText.y = 30;
+        this.uiLayer.addChild(this.livesText);
+
+        // Game Over Overlay Container
+        this.gameOverBox = new Container();
+        const goBg = new Graphics();
+        goBg.roundRect(0, 0, 480, 140, 8);
+        goBg.fill({ color: 0x0a0e14, alpha: 0.95 });
+        goBg.stroke({ color: 0xef4444, width: 3 });
+        this.gameOverBox.addChild(goBg);
+
+        const goTitle = new Text({
+            text: "MAZE NAVIGATION FAILED",
+            style: { fontFamily: this.fontFamily, fontSize: 13, fill: "#EF4444" },
+        });
+        goTitle.anchor.set(0.5);
+        goTitle.x = 240;
+        goTitle.y = 38;
+        this.gameOverBox.addChild(goTitle);
+
+        const goSub = new Text({
+            text: "PRESS R OR CLICK TO RETRY",
+            style: { fontFamily: this.fontFamily, fontSize: 9, fill: "#FBBF24" },
+        });
+        goSub.anchor.set(0.5);
+        goSub.x = 240;
+        goSub.y = 76;
+        this.gameOverBox.addChild(goSub);
+
+        const retryBtn = new Container();
+        const rBg = new Graphics();
+        rBg.roundRect(0, 0, 180, 30, 4);
+        rBg.fill({ color: 0x1e293b });
+        rBg.stroke({ color: 0x38bdf8, width: 1.5 });
+        retryBtn.addChild(rBg);
+
+        const rText = new Text({
+            text: "[ RETRY RUN ]",
+            style: { fontFamily: this.fontFamily, fontSize: 8, fill: "#38BDF8" },
+        });
+        rText.anchor.set(0.5);
+        rText.x = 90;
+        rText.y = 15;
+        retryBtn.addChild(rText);
+
+        retryBtn.x = 150;
+        retryBtn.y = 96;
+        retryBtn.eventMode = "static";
+        retryBtn.cursor = "pointer";
+        retryBtn.on("pointertap", () => this.restart());
+        this.gameOverBox.addChild(retryBtn);
+
+        this.gameOverBox.x = (this.app.screen.width - 480) / 2;
+        this.gameOverBox.y = (this.app.screen.height - 140) / 2;
+        this.gameOverBox.visible = false;
+        this.uiLayer.addChild(this.gameOverBox);
+
         // Prominent CV Guidance & Consensus Prompt Card
         this.guideCard = new Container();
         const cardBg = new Graphics();
@@ -356,6 +478,13 @@ export class Level2Maze {
     }
 
     update(deltaTime) {
+        if (this.gameOver) {
+            if (this.input && (this.input.wasPressed("r") || this.input.wasPressed("R"))) {
+                this.restart();
+            }
+            return;
+        }
+
         if (this.levelCompleted) return;
 
         const dtSec = deltaTime / 60;
@@ -364,13 +493,24 @@ export class Level2Maze {
         if (this.roastCooldown > 0) this.roastCooldown -= dtSec;
         if (this.wallBumpCooldown > 0) this.wallBumpCooldown -= dtSec;
 
+        // Damage invulnerability timer and visual flicker
+        if (this.player.invulnerableTimer > 0) {
+            this.player.invulnerableTimer -= dtSec;
+            this.player.sprite.alpha = Math.floor(this.player.invulnerableTimer * 10) % 2 === 0 ? 0.35 : 0.9;
+        } else {
+            this.player.sprite.alpha = 1.0;
+        }
+
         // 1. Process Steering (CV Cooperative Agreement + Manual Fallback)
         this.handleSteering(deltaTime, dtSec);
 
-        // 2. Check Exit Pad & Mutual Facing Condition
+        // 2. Update Laser Hazards & Check Collisions
+        this.updateLasers(dtSec);
+
+        // 3. Check Exit Pad & Mutual Facing Condition
         this.handleExitCheck(dtSec);
 
-        // 3. Dialogue fading
+        // 4. Dialogue fading
         if (this.dialogueTimer > 0) {
             this.dialogueTimer -= dtSec;
             if (this.dialogueTimer <= 0.5) {
@@ -381,9 +521,140 @@ export class Level2Maze {
             }
         }
 
-        // 4. Update player sprite transform
+        // 5. Update player sprite transform
         this.player.sprite.x = this.player.x;
         this.player.sprite.y = this.player.y;
+    }
+
+    updateLasers(dtSec) {
+        for (const laser of this.lasers) {
+            laser.timer += dtSec;
+            const cycleTotal = laser.activeDuration + laser.inactiveDuration + laser.warningDuration;
+            const cyclePos = laser.timer % cycleTotal;
+
+            if (cyclePos < laser.activeDuration) {
+                laser.state = "ACTIVE";
+            } else if (cyclePos < laser.activeDuration + laser.inactiveDuration) {
+                laser.state = "INACTIVE";
+            } else {
+                laser.state = "WARNING";
+            }
+
+            const x1 = this.offsetX + laser.tileX1 * this.tileSize;
+            const y1 = this.offsetY + laser.tileY1 * this.tileSize;
+            const x2 = this.offsetX + laser.tileX2 * this.tileSize;
+            const y2 = this.offsetY + laser.tileY2 * this.tileSize;
+
+            laser.gfx.clear();
+
+            // Draw emitter node caps
+            laser.gfx.circle(x1, y1, 5);
+            laser.gfx.fill({ color: 0x334155 });
+            laser.gfx.stroke({ color: 0x94a3b8, width: 1.5 });
+
+            laser.gfx.circle(x2, y2, 5);
+            laser.gfx.fill({ color: 0x334155 });
+            laser.gfx.stroke({ color: 0x94a3b8, width: 1.5 });
+
+            if (laser.state === "ACTIVE") {
+                // Intense red glowing laser beam
+                const pulse = Math.sin(Date.now() * 0.02) * 2;
+                // Outer glow
+                laser.gfx.moveTo(x1, y1);
+                laser.gfx.lineTo(x2, y2);
+                laser.gfx.stroke({ color: 0xef4444, width: 8 + pulse, alpha: 0.45 });
+
+                // Inner core
+                laser.gfx.moveTo(x1, y1);
+                laser.gfx.lineTo(x2, y2);
+                laser.gfx.stroke({ color: 0xffffff, width: 3, alpha: 0.95 });
+
+                // Check collision with player
+                if (this.player.invulnerableTimer <= 0 && !this.gameOver && !this.levelCompleted) {
+                    if (this.checkLaserCollision(x1, y1, x2, y2, this.player.x, this.player.y, this.player.radius)) {
+                        this.loseHeart();
+                    }
+                }
+            } else if (laser.state === "WARNING") {
+                // Flashing yellow warning tracer
+                const warnAlpha = Math.sin(Date.now() * 0.03) > 0 ? 0.8 : 0.2;
+                laser.gfx.moveTo(x1, y1);
+                laser.gfx.lineTo(x2, y2);
+                laser.gfx.stroke({ color: 0xf59e0b, width: 2, alpha: warnAlpha });
+            } else {
+                // Inactive: subtle dotted guide line
+                laser.gfx.moveTo(x1, y1);
+                laser.gfx.lineTo(x2, y2);
+                laser.gfx.stroke({ color: 0x475569, width: 1, alpha: 0.25 });
+            }
+        }
+    }
+
+    checkLaserCollision(x1, y1, x2, y2, px, py, radius) {
+        const dx = x2 - x1;
+        const dy = y2 - y1;
+        const lenSq = dx * dx + dy * dy;
+        if (lenSq === 0) {
+            return Math.hypot(px - x1, py - y1) <= radius;
+        }
+        const t = Math.max(0, Math.min(1, ((px - x1) * dx + (py - y1) * dy) / lenSq));
+        const projX = x1 + t * dx;
+        const projY = y1 + t * dy;
+        const distSq = (px - projX) * (px - projX) + (py - projY) * (py - projY);
+        return distSq <= (radius + 3) * (radius + 3);
+    }
+
+    updateLivesText() {
+        if (!this.livesText) return;
+        const hearts = "❤️".repeat(Math.max(0, this.lives));
+        const empty = "🖤".repeat(Math.max(0, this.maxLives - this.lives));
+        this.livesText.text = `LIVES: ${hearts}${empty}`;
+    }
+
+    loseHeart() {
+        if (this.gameOver || this.levelCompleted || this.player.invulnerableTimer > 0) return;
+        this.lives--;
+        this.updateLivesText();
+
+        if (this.soundManager) {
+            this.soundManager.playPlayerHit();
+        }
+
+        this.player.invulnerableTimer = 1.5;
+        this.player.sprite.alpha = 0.4;
+        setTimeout(() => {
+            if (this.player && this.player.sprite && !this.player.sprite.destroyed) {
+                this.player.sprite.alpha = 1.0;
+            }
+        }, 300);
+
+        if (this.lives <= 0) {
+            this.gameOver = true;
+            if (this.gameOverBox) this.gameOverBox.visible = true;
+            if (this.soundManager) this.soundManager.playCancel();
+            commentary.say("Vessel destroyed by security laser grid! Protocol terminated.", { textOnly: true });
+        }
+    }
+
+    resetHearts() {
+        this.lives = this.maxLives;
+        this.updateLivesText();
+        this.gameOver = false;
+        if (this.gameOverBox) this.gameOverBox.visible = false;
+    }
+
+    restart() {
+        this.lives = this.maxLives;
+        this.updateLivesText();
+        this.gameOver = false;
+        if (this.gameOverBox) this.gameOverBox.visible = false;
+
+        // Reset player to start tile [1.5, 1.5]
+        this.player.x = this.offsetX + 1.5 * this.tileSize;
+        this.player.y = this.offsetY + 1.5 * this.tileSize;
+        this.player.invulnerableTimer = 0;
+        this.player.sprite.alpha = 1.0;
+        this.syncTimer = 0;
     }
 
     handleSteering(deltaTime, dtSec) {
