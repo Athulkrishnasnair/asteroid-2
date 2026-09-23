@@ -577,45 +577,66 @@ export class Level3Subway {
     }
 
     handleActionCommand(cmd, rawTranscript = "") {
-        console.log(`[Level 3 Voice] Command recognized: ${cmd} (raw: "${rawTranscript}")`);
-        this.lastRecognizedCommand = cmd;
+        const normalized = (cmd || "").toString().trim().toUpperCase();
+        console.log(`[Level 3 Voice] Command recognized: "${normalized}" (raw: "${rawTranscript}")`);
+        this.lastRecognizedCommand = normalized;
         this.commandFeedbackTimer = 1.2;
 
         commentary.recordStat("subwayCommands");
 
-        this.cmdBadge.text = `COMMAND RECOGNIZED: [${cmd}]`;
+        this.cmdBadge.text = `COMMAND RECOGNIZED: [${normalized}]`;
         this.cmdBadge.style.fill = "#38BDF8";
 
         if (this.soundManager) {
             this.soundManager.playSelect();
         }
 
-        if (cmd === "LEFT") {
+        if (normalized === "LEFT") {
             this.changeLane(-1);
-        } else if (cmd === "RIGHT") {
+        } else if (normalized === "RIGHT") {
             this.changeLane(1);
-        } else if (cmd === "UP" || cmd === "JUMP") {
+        } else if (normalized === "UP" || normalized === "JUMP") {
             this.performJump();
-        } else if (cmd === "DOWN" || cmd === "DUCK") {
+        } else if (normalized === "DOWN" || normalized === "DUCK") {
             this.performDuck();
         }
 
         if (this.dbgAction) {
-            this.dbgAction.text = `LAST ACTION: ${cmd}`;
+            this.dbgAction.text = `LAST ACTION: ${normalized}`;
         }
     }
 
     changeLane(direction) {
         // direction: -1 (left), 1 (right)
-        // Clamps strictly to 0 (LEFT), 1 (MIDDLE), 2 (RIGHT)
+        // Strictly clamps: 0 = LEFT, 1 = MIDDLE, 2 = RIGHT
+        const prevLane = this.currentLane;
         const nextLane = Math.max(0, Math.min(2, this.currentLane + direction));
         this.currentLane = nextLane;
         this.player.lane = nextLane;
-        if (this.lanePositions && this.lanePositions.length === 3) {
-            this.player.targetX = this.lanePositions[this.currentLane];
-        } else {
-            this.player.targetX = this.centerX + (this.currentLane - 1) * this.laneSpacing;
+
+        // Always rebuild lanePositions from authoritative centerX set by recalculateLayout.
+        // Do NOT use stale this.laneSpacing from the constructor — always recompute from centerX.
+        if (!this.centerX || this.centerX <= 0) {
+            this.centerX = this.app.screen.width / 2;
         }
+        if (!this.laneSpacing || this.laneSpacing <= 0) {
+            const sw = this.app.screen.width;
+            this.laneSpacing = Math.min(130, Math.max(80, sw * 0.16));
+        }
+        // Always sync lanePositions so they match current screen layout
+        this.lanePositions = [
+            this.centerX - this.laneSpacing,
+            this.centerX,
+            this.centerX + this.laneSpacing,
+        ];
+
+        this.player.targetX = this.lanePositions[this.currentLane];
+        console.log(
+            `[Level 3] changeLane: dir=${direction} lane ${prevLane}→${this.currentLane}` +
+            ` | lanePositions=[${this.lanePositions.map(v => Math.round(v)).join(',')}]` +
+            ` | targetX=${Math.round(this.player.targetX)}` +
+            ` | player.x=${Math.round(this.player.x)}`
+        );
     }
 
     performJump() {
@@ -623,9 +644,11 @@ export class Level3Subway {
         // Cancel active duck state if jumping
         this.player.isDucking = false;
         this.player.duckTimer = 0;
-        if (this.player.sprite) this.player.sprite.scale.set(1.0, 1.0);
 
         this.player.isJumping = true;
+        // Takeoff squash
+        if (this.player.sprite) this.player.sprite.scale.set(1.15, 0.85);
+
         // Louder voice command produces higher jump boost
         const boost = Math.min(6, (this.currentVolume || 0) * 8);
         this.player.jumpVel = -(this.player.jumpStrength + boost);
@@ -636,9 +659,14 @@ export class Level3Subway {
     }
 
     performDuck() {
-        if (this.player.isJumping) return;
+        if (this.player.isJumping) {
+            // Fast-fall downward if ducking in mid-air
+            this.player.jumpVel += 8;
+            return;
+        }
         this.player.isDucking = true;
         this.player.duckTimer = this.player.duckDuration;
+        if (this.player.sprite) this.player.sprite.scale.set(1.3, 0.55);
 
         if (this.soundManager) {
             this.soundManager.playDuck();
@@ -728,34 +756,62 @@ export class Level3Subway {
         this.alienCard.x = this.app.screen.width - 176;
         this.alienCard.y = 14;
 
-        // 1. Process Keyboard Fallbacks (WASD / Arrow Keys)
+        // 1. Process Keyboard Fallbacks (WASD / Arrow Keys / Space)
         this.handleKeyboardInput();
 
-        // 2. Player horizontal lane lerp
-        this.player.x += (this.player.targetX - this.player.x) * 0.22;
+        // 2. Player horizontal lane lerp (smooth, responsive transition)
+        const dx = this.player.targetX - this.player.x;
+        if (Math.abs(dx) > 0.5) {
+            this.player.x += dx * 0.28;
+        } else {
+            this.player.x = this.player.targetX;
+        }
 
-        // 3. Player Jump physics
+        // 3. Player Jump physics with squash and stretch
         if (this.player.isJumping) {
             this.player.jumpY += this.player.jumpVel * (deltaTime / 1.0);
             this.player.jumpVel += this.player.gravity * (deltaTime / 1.0);
+
+            // Dynamic jump stretch based on velocity
+            if (this.player.jumpVel < -2) {
+                // Rising: stretch vertically, squash horizontally
+                this.player.sprite.scale.set(0.88, 1.15);
+            } else if (this.player.jumpVel > 2) {
+                // Falling: slightly elongated
+                this.player.sprite.scale.set(0.92, 1.10);
+            } else {
+                // Apex
+                this.player.sprite.scale.set(1.0, 1.0);
+            }
 
             if (this.player.jumpY >= 0) {
                 this.player.jumpY = 0;
                 this.player.jumpVel = 0;
                 this.player.isJumping = false;
+                // Subtle landing squash
+                this.player.sprite.scale.set(1.2, 0.82);
+                setTimeout(() => {
+                    if (this.player && this.player.sprite && !this.player.isDucking && !this.player.isJumping) {
+                        this.player.sprite.scale.set(1.0, 1.0);
+                    }
+                }, 100);
             }
         }
 
-        // 4. Player Duck state
+        // 4. Player Duck state with squash and stretch
         if (this.player.isDucking) {
             this.player.duckTimer -= dtSec;
-            this.player.sprite.scale.set(1.1, 0.55);
+            // Crouch: flatten vertically, widen horizontally
+            this.player.sprite.scale.set(1.3, 0.55);
             if (this.player.duckTimer <= 0) {
                 this.player.isDucking = false;
                 this.player.sprite.scale.set(1.0, 1.0);
             }
-        } else if (!this.player.isJumping) {
-            this.player.sprite.scale.set(1.0, 1.0);
+        } else if (!this.player.isJumping && this.player.jumpY === 0) {
+            // Restore scale when neutral
+            if (this.player.sprite.scale.y !== 1.0 && this.player.sprite.scale.y !== 0.82) {
+                this.player.sprite.scale.set(1.0, 1.0);
+            }
         }
 
         // 5. Speed and Difficulty Escalation

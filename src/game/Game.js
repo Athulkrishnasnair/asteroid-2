@@ -16,6 +16,12 @@ import bulletImg from "../assets/MeduimQualityAssets/MeduimQualityAssets/Bullet1
 import crosshairImg from "../assets/MeduimQualityAssets/MeduimQualityAssets/CrossHair(300px).png";
 import bgImg from "../assets/MeduimQualityAssets/MeduimQualityAssets/TilableSpace.png";
 import debrisImg from "../assets/MeduimQualityAssets/MeduimQualityAssets/AsteroidsAndAliens2(l).png";
+import portalSheetImg from "../assets/Platformer assets/Animated Sprites/GandalfHardcore Portal sheet.png";
+import hpBarImg from "../assets/Health etc/Hp bar.png";
+import redBarImg from "../assets/Health etc/red bar.png";
+import charIdleImg from "../assets/Characters/char_idle.png";
+import charRightImg from "../assets/Characters/char_right_idle.png";
+import floorTileImg from "../assets/Platformer assets/Floor Tiles1.png";
 
 export class Game {
     constructor() {
@@ -36,6 +42,12 @@ export class Game {
             crosshair: null,
             bg: null,
             debrisFrames: null,
+            portalFrames: null,
+            hpBar: null,
+            redBar: null,
+            charIdle: null,
+            charRight: null,
+            floorTile: null,
         };
 
         this.debrisList = [];
@@ -155,7 +167,10 @@ export class Game {
     // Preload textures with nearest-neighbor filtering and frame slicing
     async loadGameAssets() {
         try {
-            const [baseShip, baseGold, baseAlien, bulletTex, crosshairTex, bgTex, baseDebris] = await Promise.all([
+            const [
+                baseShip, baseGold, baseAlien, bulletTex, crosshairTex, bgTex, baseDebris,
+                basePortal, hpBarTex, redBarTex, charIdleTex, charRightTex, floorTileTex
+            ] = await Promise.all([
                 Assets.load(shipImg),
                 Assets.load(goldShipImg),
                 Assets.load(alienImg),
@@ -163,6 +178,12 @@ export class Game {
                 Assets.load(crosshairImg),
                 Assets.load(bgImg),
                 Assets.load(debrisImg),
+                Assets.load(portalSheetImg).catch(() => null),
+                Assets.load(hpBarImg).catch(() => null),
+                Assets.load(redBarImg).catch(() => null),
+                Assets.load(charIdleImg).catch(() => null),
+                Assets.load(charRightImg).catch(() => null),
+                Assets.load(floorTileImg).catch(() => null),
             ]);
 
             // Nearest-neighbor scaling for crisp pixel art
@@ -206,6 +227,41 @@ export class Game {
                 new Texture({ source: baseDebris.source, frame: new Rectangle(800, 0, 800, 800) }),
                 new Texture({ source: baseDebris.source, frame: new Rectangle(0, 800, 800, 800) }),
             ];
+
+            // Animated portal frames (10 frames of 64x64 from 640x64 sheet)
+            if (basePortal) {
+                basePortal.source.scaleMode = "nearest";
+                this.textures.portalFrames = [];
+                for (let i = 0; i < 10; i++) {
+                    this.textures.portalFrames.push(
+                        new Texture({ source: basePortal.source, frame: new Rectangle(i * 64, 0, 64, 64) })
+                    );
+                }
+            }
+
+            // Health bar textures
+            if (hpBarTex) {
+                hpBarTex.source.scaleMode = "nearest";
+                this.textures.hpBar = hpBarTex;
+            }
+            if (redBarTex) {
+                redBarTex.source.scaleMode = "nearest";
+                this.textures.redBar = redBarTex;
+            }
+
+            // Character textures
+            if (charIdleTex) {
+                charIdleTex.source.scaleMode = "nearest";
+                this.textures.charIdle = charIdleTex;
+            }
+            if (charRightTex) {
+                charRightTex.source.scaleMode = "nearest";
+                this.textures.charRight = charRightTex;
+            }
+            if (floorTileTex) {
+                floorTileTex.source.scaleMode = "nearest";
+                this.textures.floorTile = floorTileTex;
+            }
 
             console.log("All game visual assets loaded successfully!");
         } catch (err) {

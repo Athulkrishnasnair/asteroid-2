@@ -782,7 +782,7 @@ export class Level4PowerMeter {
         this.onComplete();
     }
 
-    // ─── Webcam PiP Overlay with Real-time Pose Skeleton ──────────────────────
+    // ─── Dual Webcam PiP Panels: PLAYER 1 CAMERA & PLAYER 2 CAMERA ───────────
 
     initWebcamPiP() {
         if (document.getElementById("level4-pip-overlay")) return;
@@ -791,102 +791,179 @@ export class Level4PowerMeter {
         this._pipEl.id = "level4-pip-overlay";
         Object.assign(this._pipEl.style, {
             position: "fixed",
-            bottom: "20px",
-            left: "20px",
-            width: "280px",
+            bottom: "16px",
+            left: "16px",
+            display: "flex",
+            gap: "12px",
             zIndex: "30",
             fontFamily: "'Press Start 2P', monospace",
             pointerEvents: "none",
         });
 
-        const header = document.createElement("div");
-        Object.assign(header.style, {
+        // ─── Panel 1: Player 1 Camera Card ────────────────────────────────────
+        const p1Card = document.createElement("div");
+        p1Card.style.width = "180px";
+
+        const p1Header = document.createElement("div");
+        Object.assign(p1Header.style, {
             background: "#070a10",
-            border: "2px solid #38bdf8",
+            border: "2px solid #22c55e",
             borderBottom: "none",
-            color: "#38bdf8",
-            fontSize: "7.5px",
-            letterSpacing: "1px",
-            padding: "5px 10px",
+            color: "#22c55e",
+            fontSize: "6.5px",
+            letterSpacing: "0.5px",
+            padding: "4px 6px",
             display: "flex",
             justifyContent: "space-between",
             alignItems: "center",
         });
-        header.innerHTML = '<span>POSE TRACKER // SKELETON</span><span style="color:#22c55e">● LIVE</span>';
-        this._pipEl.appendChild(header);
+        p1Header.innerHTML = '<span>P1 CAMERA</span><span style="color:#22c55e">● LIVE</span>';
+        p1Card.appendChild(p1Header);
 
-        this._pipCanvas = document.createElement("canvas");
-        this._pipCanvas.width = 280;
-        this._pipCanvas.height = 190;
-        Object.assign(this._pipCanvas.style, {
+        this._p1Canvas = document.createElement("canvas");
+        this._p1Canvas.width = 180;
+        this._p1Canvas.height = 125;
+        Object.assign(this._p1Canvas.style, {
             display: "block",
-            border: "2px solid #38bdf8",
+            border: "2px solid #22c55e",
             borderTop: "none",
             imageRendering: "pixelated",
         });
-        this._pipEl.appendChild(this._pipCanvas);
-        this._pipCtx = this._pipCanvas.getContext("2d");
+        p1Card.appendChild(this._p1Canvas);
+        this._p1Ctx = this._p1Canvas.getContext("2d");
 
-        this._pipStatusBar = document.createElement("div");
-        Object.assign(this._pipStatusBar.style, {
+        this._p1StatusBar = document.createElement("div");
+        Object.assign(this._p1StatusBar.style, {
             background: "#070a10",
-            border: "2px solid #38bdf8",
-            borderTop: "1px solid #1e3a5f",
-            color: "#9ca3af",
-            fontSize: "6.5px",
-            padding: "4px 8px",
-            letterSpacing: "1px",
+            border: "2px solid #22c55e",
+            borderTop: "1px solid #14532d",
+            color: "#22c55e",
+            fontSize: "6px",
+            padding: "3px 6px",
+            letterSpacing: "0.5px",
         });
-        this._pipStatusBar.textContent = "STAND BACK & CURL ARMS";
-        this._pipEl.appendChild(this._pipStatusBar);
+        this._p1StatusBar.textContent = "P1: 0 REPS (180°)";
+        p1Card.appendChild(this._p1StatusBar);
 
+        // ─── Panel 2: Player 2 Camera Card ────────────────────────────────────
+        const p2Card = document.createElement("div");
+        p2Card.style.width = "180px";
+
+        const p2Header = document.createElement("div");
+        Object.assign(p2Header.style, {
+            background: "#070a10",
+            border: "2px solid #fbbf24",
+            borderBottom: "none",
+            color: "#fbbf24",
+            fontSize: "6.5px",
+            letterSpacing: "0.5px",
+            padding: "4px 6px",
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+        });
+        p2Header.innerHTML = '<span>P2 CAMERA</span><span style="color:#fbbf24">● LIVE</span>';
+        p2Card.appendChild(p2Header);
+
+        this._p2Canvas = document.createElement("canvas");
+        this._p2Canvas.width = 180;
+        this._p2Canvas.height = 125;
+        Object.assign(this._p2Canvas.style, {
+            display: "block",
+            border: "2px solid #fbbf24",
+            borderTop: "none",
+            imageRendering: "pixelated",
+        });
+        p2Card.appendChild(this._p2Canvas);
+        this._p2Ctx = this._p2Canvas.getContext("2d");
+
+        this._p2StatusBar = document.createElement("div");
+        Object.assign(this._p2StatusBar.style, {
+            background: "#070a10",
+            border: "2px solid #fbbf24",
+            borderTop: "1px solid #78350f",
+            color: "#fbbf24",
+            fontSize: "6px",
+            padding: "3px 6px",
+            letterSpacing: "0.5px",
+        });
+        this._p2StatusBar.textContent = "P2: 0 REPS (180°)";
+        p2Card.appendChild(this._p2StatusBar);
+
+        this._pipEl.appendChild(p1Card);
+        this._pipEl.appendChild(p2Card);
         document.body.appendChild(this._pipEl);
 
-        // Draw PiP Loop
+        // Draw Dual PiP Loop
         const drawPiP = () => {
             this._pipRaf = requestAnimationFrame(drawPiP);
-            const ctx = this._pipCtx;
-            if (!ctx) return;
-            const w = this._pipCanvas.width;
-            const h = this._pipCanvas.height;
 
-            ctx.fillStyle = "#070a10";
-            ctx.fillRect(0, 0, w, h);
+            // Draw Player 1 Camera Panel
+            if (this._p1Ctx) {
+                const ctx = this._p1Ctx;
+                const w = this._p1Canvas.width;
+                const h = this._p1Canvas.height;
 
-            if (this.video && this.video.readyState >= 2) {
-                // Mirror Video
-                ctx.save();
-                ctx.translate(w, 0);
-                ctx.scale(-1, 1);
-                ctx.drawImage(this.video, 0, 0, w, h);
-                ctx.restore();
+                ctx.fillStyle = "#070a10";
+                ctx.fillRect(0, 0, w, h);
 
-                // Draw Pose Skeleton & Angle Overlays
-                this.drawSkeletonOverlay(ctx, this.p1Tracker.landmarks, w, h, "#22c55e", "P1");
-                this.drawSkeletonOverlay(ctx, this.p2Tracker.landmarks, w, h, "#fbbf24", "P2");
+                if (this.video && this.video.readyState >= 2) {
+                    ctx.save();
+                    ctx.translate(w, 0);
+                    ctx.scale(-1, 1);
+                    ctx.drawImage(this.video, 0, 0, w, h);
+                    ctx.restore();
 
-                // CRT Scanlines
-                ctx.fillStyle = "rgba(0,0,0,0.16)";
-                for (let y = 0; y < h; y += 3) {
-                    ctx.fillRect(0, y, w, 1);
-                }
+                    this.drawSkeletonOverlay(ctx, this.p1Tracker.landmarks, w, h, "#22c55e", "PLAYER 1");
 
-                // Status message
-                if (this.state === "SHOWDOWN") {
-                    this._pipStatusBar.textContent = `P1: ${this.p1Tracker.reps} REPS  |  P2: ${this.p2Tracker.reps} REPS`;
-                    this._pipStatusBar.style.color = "#34d399";
-                } else if (this.state === "REVEAL") {
-                    this._pipStatusBar.textContent = `COMPLETE // P1: ${this.p1Tracker.reps} vs P2: ${this.p2Tracker.reps}`;
-                    this._pipStatusBar.style.color = "#f59e0b";
+                    // Scanlines
+                    ctx.fillStyle = "rgba(0,0,0,0.18)";
+                    for (let y = 0; y < h; y += 3) {
+                        ctx.fillRect(0, y, w, 1);
+                    }
+
+                    this._p1StatusBar.textContent = `P1: ${this.p1Tracker.reps} REPS (${Math.round(this.p1Tracker.smoothedAngle)}°)`;
                 } else {
-                    this._pipStatusBar.textContent = "READY // STAND IN WEBCAM VIEW";
-                    this._pipStatusBar.style.color = "#9ca3af";
+                    ctx.fillStyle = "#22c55e";
+                    ctx.font = "6.5px 'Press Start 2P', monospace";
+                    ctx.textAlign = "center";
+                    ctx.fillText("P1: MANUAL / SIM", w / 2, h / 2);
+                    this._p1StatusBar.textContent = `P1: ${this.p1Tracker.reps} REPS [KEY 1]`;
                 }
-            } else {
-                ctx.fillStyle = "#ef4444";
-                ctx.font = "8px 'Press Start 2P', monospace";
-                ctx.textAlign = "center";
-                ctx.fillText("NO WEBCAM SIGNAL", w / 2, h / 2);
+            }
+
+            // Draw Player 2 Camera Panel
+            if (this._p2Ctx) {
+                const ctx = this._p2Ctx;
+                const w = this._p2Canvas.width;
+                const h = this._p2Canvas.height;
+
+                ctx.fillStyle = "#070a10";
+                ctx.fillRect(0, 0, w, h);
+
+                if (this.video && this.video.readyState >= 2) {
+                    ctx.save();
+                    ctx.translate(w, 0);
+                    ctx.scale(-1, 1);
+                    ctx.drawImage(this.video, 0, 0, w, h);
+                    ctx.restore();
+
+                    this.drawSkeletonOverlay(ctx, this.p2Tracker.landmarks, w, h, "#fbbf24", "PLAYER 2");
+
+                    // Scanlines
+                    ctx.fillStyle = "rgba(0,0,0,0.18)";
+                    for (let y = 0; y < h; y += 3) {
+                        ctx.fillRect(0, y, w, 1);
+                    }
+
+                    this._p2StatusBar.textContent = `P2: ${this.p2Tracker.reps} REPS (${Math.round(this.p2Tracker.smoothedAngle)}°)`;
+                } else {
+                    ctx.fillStyle = "#fbbf24";
+                    ctx.font = "6.5px 'Press Start 2P', monospace";
+                    ctx.textAlign = "center";
+                    ctx.fillText("P2: MANUAL / SIM", w / 2, h / 2);
+                    this._p2StatusBar.textContent = `P2: ${this.p2Tracker.reps} REPS [KEY 2]`;
+                }
             }
         };
 
@@ -896,17 +973,16 @@ export class Level4PowerMeter {
     drawSkeletonOverlay(ctx, landmarks, w, h, color, label) {
         if (!landmarks || landmarks.length === 0) return;
 
-        // Joints to connect: Left arm (11->13->15) and Right arm (12->14->16)
         const toCanvas = (pt) => ({
-            x: (1 - pt.x) * w, // Mirrored X
+            x: (1 - pt.x) * w,
             y: pt.y * h,
         });
 
-        ctx.lineWidth = 3;
+        ctx.lineWidth = 2.5;
         ctx.strokeStyle = color;
         ctx.fillStyle = color;
 
-        // Draw Right Arm
+        // Right Arm (12 -> 14 -> 16)
         const rs = landmarks[R_SHOULDER] ? toCanvas(landmarks[R_SHOULDER]) : null;
         const re = landmarks[R_ELBOW] ? toCanvas(landmarks[R_ELBOW]) : null;
         const rw = landmarks[R_WRIST] ? toCanvas(landmarks[R_WRIST]) : null;
@@ -920,16 +996,15 @@ export class Level4PowerMeter {
 
             [rs, re, rw].forEach((pt) => {
                 ctx.beginPath();
-                ctx.circle ? ctx.arc(pt.x, pt.y, 4, 0, Math.PI * 2) : ctx.arc(pt.x, pt.y, 4, 0, Math.PI * 2);
+                ctx.arc(pt.x, pt.y, 3.5, 0, Math.PI * 2);
                 ctx.fill();
             });
 
-            // Draw player label over shoulder
-            ctx.font = "7px 'Press Start 2P', monospace";
-            ctx.fillText(label, rs.x - 8, rs.y - 10);
+            ctx.font = "6px 'Press Start 2P', monospace";
+            ctx.fillText(label, Math.max(10, rs.x - 20), Math.max(12, rs.y - 8));
         }
 
-        // Draw Left Arm
+        // Left Arm (11 -> 13 -> 15)
         const ls = landmarks[L_SHOULDER] ? toCanvas(landmarks[L_SHOULDER]) : null;
         const le = landmarks[L_ELBOW] ? toCanvas(landmarks[L_ELBOW]) : null;
         const lw = landmarks[L_WRIST] ? toCanvas(landmarks[L_WRIST]) : null;
@@ -943,7 +1018,7 @@ export class Level4PowerMeter {
 
             [ls, le, lw].forEach((pt) => {
                 ctx.beginPath();
-                ctx.arc(pt.x, pt.y, 4, 0, Math.PI * 2);
+                ctx.arc(pt.x, pt.y, 3.5, 0, Math.PI * 2);
                 ctx.fill();
             });
         }
@@ -957,8 +1032,10 @@ export class Level4PowerMeter {
         const el = document.getElementById("level4-pip-overlay");
         if (el) el.remove();
         this._pipEl = null;
-        this._pipCanvas = null;
-        this._pipCtx = null;
+        this._p1Canvas = null;
+        this._p1Ctx = null;
+        this._p2Canvas = null;
+        this._p2Ctx = null;
     }
 
     destroy() {
